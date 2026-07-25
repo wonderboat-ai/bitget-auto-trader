@@ -1,0 +1,738 @@
+<title>Motor 24h no PC2 — guia de instalação</title>
+<style>
+  :root {
+    --bg: #EAEDEC;
+    --surface: #F7F9F8;
+    --surface-2: #DEE3E1;
+    --ink: #16211F;
+    --ink-soft: #48605C;
+    --accent: #1B6F72;
+    --accent-ink: #0D3E40;
+    --accent-soft: #DCEAE9;
+    --danger: #A6392F;
+    --danger-soft: #F3DCD8;
+    --danger-ink: #6E2019;
+    --ok: #3C7A4F;
+    --ok-soft: #DCEBE0;
+    --code-bg: #16211F;
+    --code-text: #EAD6A0;
+    --code-text-dim: #8FA6A3;
+    --border: #C7CFCD;
+    --font-display: Cambria, Georgia, "Times New Roman", serif;
+    --font-body: "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+    --font-mono: "Cascadia Code", Consolas, "SF Mono", ui-monospace, Menlo, monospace;
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #101817;
+    --surface: #17201F;
+    --surface-2: #1F2A28;
+    --ink: #E7ECEA;
+    --ink-soft: #A9BAB6;
+    --accent: #4FB3AF;
+    --accent-ink: #CFEDEA;
+    --accent-soft: #1B3634;
+    --danger: #E08A7E;
+    --danger-ink: #FBE2DC;
+    --danger-soft: #3A211D;
+    --ok: #7BC495;
+    --ok-soft: #1C3226;
+    --code-bg: #0B1211;
+    --code-text: #F0CE86;
+    --code-text-dim: #6E827F;
+    --border: #2A3937;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #101817;
+      --surface: #17201F;
+      --surface-2: #1F2A28;
+      --ink: #E7ECEA;
+      --ink-soft: #A9BAB6;
+      --accent: #4FB3AF;
+      --accent-ink: #CFEDEA;
+      --accent-soft: #1B3634;
+      --danger: #E08A7E;
+      --danger-ink: #FBE2DC;
+      --danger-soft: #3A211D;
+      --ok: #7BC495;
+      --ok-soft: #1C3226;
+      --code-bg: #0B1211;
+      --code-text: #F0CE86;
+      --code-text-dim: #6E827F;
+      --border: #2A3937;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 0 24px 96px;
+  }
+
+  /* ---------- sticky step nav ---------- */
+  .stepnav {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .stepnav::-webkit-scrollbar { display: none; }
+  .stepnav-inner {
+    max-width: 760px;
+    margin: 0 auto;
+    display: flex;
+    gap: 8px;
+    padding: 10px 24px;
+    white-space: nowrap;
+  }
+  .stepnav a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    color: var(--ink-soft);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    text-decoration: none;
+    flex: none;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .stepnav a:hover { border-color: var(--accent); color: var(--accent); }
+  .stepnav a.tag {
+    width: auto;
+    border-radius: 15px;
+    padding: 0 12px;
+  }
+
+  /* ---------- header ---------- */
+  header.hero {
+    padding: 56px 0 28px;
+  }
+  .kicker {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .kicker::before {
+    content: "";
+    width: 22px;
+    height: 1px;
+    background: var(--accent);
+    display: inline-block;
+  }
+  h1 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: clamp(1.9rem, 4vw, 2.5rem);
+    line-height: 1.15;
+    text-wrap: balance;
+    margin: 0 0 14px;
+    color: var(--ink);
+  }
+  .lede {
+    font-size: 1.06rem;
+    color: var(--ink-soft);
+    max-width: 60ch;
+    margin: 0 0 22px;
+  }
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 22px;
+    font-size: 0.86rem;
+    color: var(--ink-soft);
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+  }
+  .meta-row strong { color: var(--ink); font-weight: 600; }
+  .meta-row a { color: var(--accent); }
+
+  /* ---------- diagram: PC1 vs PC2 ---------- */
+  .machines {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 14px;
+    margin: 26px 0 6px;
+  }
+  .machine {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+  }
+  .machine .name {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+  }
+  .machine .role {
+    font-family: var(--font-display);
+    font-size: 1.05rem;
+    margin: 4px 0 6px;
+  }
+  .machine .detail { font-size: 0.86rem; color: var(--ink-soft); }
+  .machines .link {
+    text-align: center;
+    color: var(--ink-soft);
+    font-family: var(--font-mono);
+    font-size: 1.3rem;
+  }
+  @media (max-width: 560px) {
+    .machines { grid-template-columns: 1fr; }
+    .machines .link { transform: rotate(90deg); }
+  }
+
+  /* ---------- callouts ---------- */
+  .rule {
+    background: var(--danger-soft);
+    border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+    border-left: 4px solid var(--danger);
+    border-radius: 8px;
+    padding: 22px 24px;
+    margin: 34px 0;
+  }
+  .rule .rule-label {
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--danger-ink);
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+  .rule p { margin: 0 0 10px; color: var(--danger-ink); }
+  .rule p:last-child { margin-bottom: 0; }
+  .rule strong { font-weight: 700; }
+
+  .tip, .warn, .ok-box {
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin: 16px 0;
+    font-size: 0.92rem;
+    border-left: 3px solid;
+  }
+  .tip { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
+  .warn { background: var(--danger-soft); border-color: var(--danger); color: var(--danger-ink); }
+  .ok-box { background: var(--ok-soft); border-color: var(--ok); color: var(--ink); }
+  .tip .lbl, .warn .lbl, .ok-box .lbl {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+    display: block;
+    margin-bottom: 4px;
+  }
+  .tip .lbl { color: var(--accent-ink, var(--accent)); }
+  .warn .lbl { color: var(--danger-ink); }
+  .ok-box .lbl { color: var(--ok); }
+
+  /* ---------- checklist box ---------- */
+  .prereqs {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin: 28px 0;
+  }
+  .prereqs h2 {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin: 0 0 12px;
+  }
+  .prereqs ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+  .prereqs li { display: flex; gap: 10px; align-items: baseline; }
+  .prereqs li::before {
+    content: "—";
+    color: var(--accent);
+    flex: none;
+  }
+
+  /* ---------- steps ---------- */
+  section.step {
+    padding: 40px 0;
+    border-top: 1px solid var(--border);
+    scroll-margin-top: 60px;
+  }
+  .step-head {
+    display: flex;
+    gap: 16px;
+    align-items: baseline;
+    margin-bottom: 14px;
+  }
+  .step-num {
+    font-family: var(--font-display);
+    font-size: 1rem;
+    color: var(--accent-ink, var(--accent));
+    background: var(--accent-soft);
+    border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    font-weight: 700;
+  }
+  .step h2 {
+    font-family: var(--font-display);
+    font-size: 1.36rem;
+    font-weight: 700;
+    margin: 0;
+    text-wrap: balance;
+  }
+  .step p { margin: 0 0 14px; }
+  .step ol, .step ul { margin: 0 0 14px; padding-left: 1.3em; }
+  .step li { margin-bottom: 6px; }
+  .step strong { font-weight: 700; }
+  code.inline {
+    font-family: var(--font-mono);
+    background: var(--surface-2);
+    border-radius: 4px;
+    padding: 0.1em 0.4em;
+    font-size: 0.88em;
+  }
+
+  /* ---------- code panels ---------- */
+  .codepanel {
+    background: var(--code-bg);
+    border-radius: 8px;
+    overflow: hidden;
+    margin: 14px 0 18px;
+    border: 1px solid color-mix(in srgb, var(--code-bg) 60%, #000 10%);
+  }
+  .codepanel .bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 14px;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--code-text-dim);
+    border-bottom: 1px solid color-mix(in srgb, var(--code-text-dim) 25%, transparent);
+  }
+  .codepanel button.copy {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--code-text-dim) 45%, transparent);
+    color: var(--code-text-dim);
+    border-radius: 4px;
+    padding: 3px 9px;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .codepanel button.copy:hover { color: var(--code-text); border-color: var(--code-text); }
+  .codepanel button.copy:focus-visible { outline: 2px solid var(--code-text); outline-offset: 2px; }
+  .codepanel pre {
+    margin: 0;
+    padding: 14px 16px 16px;
+    overflow-x: auto;
+  }
+  .codepanel code {
+    font-family: var(--font-mono);
+    font-size: 0.88rem;
+    color: var(--code-text);
+    line-height: 1.55;
+    white-space: pre;
+  }
+  .codepanel .c-dim { color: var(--code-text-dim); }
+
+  /* ---------- summary + troubleshooting ---------- */
+  .summary {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    margin-top: 8px;
+  }
+  details.faq {
+    border-top: 1px solid var(--border);
+    padding: 14px 0;
+  }
+  details.faq:last-of-type { border-bottom: 1px solid var(--border); }
+  details.faq summary {
+    cursor: pointer;
+    font-weight: 600;
+    font-family: var(--font-display);
+    font-size: 1.02rem;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  details.faq summary::after {
+    content: "+";
+    font-family: var(--font-mono);
+    color: var(--accent);
+    flex: none;
+  }
+  details.faq[open] summary::after { content: "–"; }
+  details.faq summary::-webkit-details-marker { display: none; }
+  details.faq p { margin: 10px 0 0; color: var(--ink-soft); }
+
+  footer {
+    margin-top: 60px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+    font-size: 0.84rem;
+    color: var(--ink-soft);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+
+<nav class="stepnav">
+  <div class="stepnav-inner">
+    <a href="#regra" class="tag">Regra de ouro</a>
+    <a href="#passo-1">1</a>
+    <a href="#passo-2">2</a>
+    <a href="#passo-3">3</a>
+    <a href="#passo-4">4</a>
+    <a href="#passo-5">5</a>
+    <a href="#passo-6">6</a>
+    <a href="#passo-7">7</a>
+    <a href="#passo-8">8</a>
+    <a href="#passo-9">9</a>
+    <a href="#passo-10">10</a>
+    <a href="#resumo" class="tag">Resumo</a>
+    <a href="#problemas" class="tag">Problemas</a>
+  </div>
+</nav>
+
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">Guia de instalação · PC2</div>
+    <h1>Deixe o motor rodando 24 horas num segundo computador</h1>
+    <p class="lede">Enquanto este PC fica livre para você desenvolver e testar melhorias, um segundo PC assume a operação contínua, com sua própria chave de API e sem depender do OneDrive.</p>
+
+    <div class="machines">
+      <div class="machine">
+        <div class="name">Este PC · PC1</div>
+        <div class="role">Desenvolvimento</div>
+        <div class="detail">Testes com <code class="inline">--once</code>, sem <code class="inline">--live</code> contínuo enquanto o PC2 estiver de pé.</div>
+      </div>
+      <div class="link">→</div>
+      <div class="machine">
+        <div class="name">PC novo · PC2</div>
+        <div class="role">Operação 24h</div>
+        <div class="detail"><code class="inline">supervisor.py --live</code> rodando sem parar, chave de API própria.</div>
+      </div>
+    </div>
+
+    <div class="meta-row">
+      <span>Repositório: <a href="https://github.com/wonderboat-ai/bybit-auto-trader" target="_blank" rel="noopener">wonderboat-ai/bybit-auto-trader</a> <strong>(privado)</strong></span>
+      <span>Tempo estimado: <strong>30–40 min</strong></span>
+      <span>Sistema: <strong>Windows</strong></span>
+    </div>
+  </header>
+
+  <div class="rule" id="regra">
+    <div class="rule-label">⚠ Regra de ouro — leia antes de tudo</div>
+    <p>O PC2 vai usar uma chave de API <strong>nova</strong>, mas essa chave acessa a <strong>mesma conta/saldo</strong> da testnet Bybit que este PC já usa. Os dois PCs "olham" para o mesmo dinheiro de testnet, só que com chaves diferentes.</p>
+    <p><strong>Por isso: os dois PCs nunca podem rodar <code class="inline">--live</code> em loop contínuo ao mesmo tempo.</strong> Se isso acontecer, os dois motores tentam gerenciar a mesma posição de forma independente — cada um com seu próprio controle de stop, cooldown e kill switch local — e podem se atropelar.</p>
+    <p>Na prática: <strong>PC2</strong> é o único que roda <code class="inline">supervisor.py --live</code> continuamente. <strong>PC1</strong> pode rodar <code class="inline">main.py --once</code> (sem <code class="inline">--live</code>) à vontade — é só simulação, não manda ordem nenhuma. O que nunca pode é este PC rodar <code class="inline">--live</code> em loop enquanto o PC2 estiver ligado.</p>
+  </div>
+
+  <div class="prereqs">
+    <h2>O que você vai precisar</h2>
+    <ul>
+      <li>O PC novo, com Windows, ligado na internet</li>
+      <li>Uns 30–40 minutos livres</li>
+      <li>Sua conta do GitHub (a mesma que já é dona do repositório — usuário <strong>wonderboat-ai</strong>)</li>
+      <li>Acesso à sua conta em <a href="https://testnet.bybit.com" target="_blank" rel="noopener">testnet.bybit.com</a>, para gerar uma chave de API nova</li>
+    </ul>
+  </div>
+  <p style="color:var(--ink-soft); font-size:0.92rem;">Todo comando abaixo é para o <strong>PowerShell</strong> do Windows (menu Iniciar → procure "Windows PowerShell").</p>
+
+  <!-- PASSO 1 -->
+  <section class="step" id="passo-1">
+    <div class="step-head"><div class="step-num">1</div><h2>Instalar o Python</h2></div>
+    <ol>
+      <li>Abra <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">python.org/downloads</a> e clique no botão amarelo "Download Python 3.x.x".</li>
+      <li>Rode o instalador baixado.</li>
+      <li>Na primeira tela, marque a caixinha <strong>"Add python.exe to PATH"</strong> — fica embaixo, antes do botão instalar.</li>
+      <li>Clique em "Install Now" e espere terminar.</li>
+      <li>Feche e abra o PowerShell de novo (precisa reabrir pra reconhecer o Python).</li>
+    </ol>
+    <div class="codepanel">
+      <div class="bar"><span>PowerShell · conferir instalação</span><button class="copy" type="button">Copiar</button></div>
+      <pre><code>python --version</code></pre>
+    </div>
+    <div class="warn"><span class="lbl">Se der erro</span>Se aparecer "não é reconhecido", o PATH não foi marcado — reinstale repetindo o passo 3.</div>
+  </section>
+
+  <!-- PASSO 2 -->
+  <section class="step" id="passo-2">
+    <div class="step-head"><div class="step-num">2</div><h2>Instalar o Git</h2></div>
+    <ol>
+      <li>Abra <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">git-scm.com/download/win</a> e baixe o instalador.</li>
+      <li>Pode ir clicando "Next" em tudo — as opções padrão servem.</li>
+      <li>Feche e abra o PowerShell de novo.</li>
+    </ol>
+    <div class="codepanel">
+      <div class="bar"><span>PowerShell · conferir instalação</span><button class="copy" type="button">Copiar</button></div>
+      <pre><code>git --version</code></pre>
+    </div>
+  </section>
+
+  <!-- PASSO 3 -->
+  <section class="step" id="passo-3">
+    <div class="step-head"><div class="step-num">3</div><h2>Instalar o GitHub CLI e entrar na conta</h2></div>
+    <p>Isso permite baixar o código do repositório privado sem complicação.</p>
+    <ol>
+      <li>Baixe em <a href="https://cli.github.com/" target="_blank" rel="noopener">cli.github.com</a> (ou rode <code class="inline">winget install --id GitHub.cli</code> no PowerShell).</li>
+      <li>Feche e abra o PowerShell de novo, depois rode o login abaixo.</li>
+    </ol>
+    <div class="codepanel">
+      <div class="bar"><span>PowerShell · login</span><button class="copy" type="button">Copiar</button></div>
+      <pre><code>gh auth login</code></pre>
+    </div>
+    <p>Responda as perguntas nesta ordem:</p>
+    <ul>
+      <li>"What account do you want to log into?" → <strong>GitHub.com</strong></li>
+      <li>"What is your preferred protocol...?" → <strong>HTTPS</strong></li>
+      <li>"Authenticate Git with your GitHub credentials?" → <strong>Yes</strong></li>
+      <li>"How would you like to authenticate?" → <strong>Login with a web browser</strong></li>
+    </ul>
+    <p>Ele mostra um código de 8 caracteres e abre o navegador sozinho. Faça login com a <strong>mesma conta</strong> dona do repositório (<code class="inline">wonderboat-ai</code>) e cole o código.</p>
+    <div class="ok-box"><span class="lbl">Confirmação</span>De volta no PowerShell deve aparecer "Logged in as wonderboat-ai".</div>
+  </section>
+
+  <!-- PASSO 4 -->
+  <section class="step" id="passo-4">
+    <div class="step-head"><div class="step-num">4</div><h2>Baixar (clonar) o código</h2></div>
+    <p>Vamos colocar o projeto direto na raiz do disco C:, <strong>fora de qualquer pasta do OneDrive</strong> — nem Documentos, nem Área de Trabalho, se essas pastas sincronizarem no PC novo.</p>
+    <div class="codepanel">
+      <div class="bar"><span>PowerShell</span><button class="copy" type="button">Copiar</button></div>
+      <pre><code>cd C:\
+gh repo clone wonderboat-ai/bybit-auto-trader BybitAutoTrader
+cd C:\BybitAutoTrader</code></pre>
+    </div>
+    <p>Confira que os arquivos apareceram com <code class="inline">dir</code>.</p>
+  </section>
+
+  <!-- PASSO 5 -->
+  <section class="step" id="passo-5">
+    <div class="step-head"><div class="step-num">5</div><h2>Criar o ambiente virtual e instalar dependências</h2></div>
+    <div class="codepanel">
+      <div class="bar"><span>PowerShell</span><button class="copy" type="button">Copiar</button></div>
+      <pre><code>cd C:\BybitAutoTrader
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt</code></pre>
+    </div>
+    <div class="tip"><span class="lbl">Como saber que está ativo</span>Com o ambiente virtual ativo, a linha do PowerShell começa com <code class="inline">(.venv)</code>. Sempre confira isso antes de rodar comandos <code class="inline">python</code> — se fechar e abrir o PowerShell de novo, rode <code class="inline">.venv\Scripts\activate</code> outra vez.</div>
+    <div class="warn"><span class="lbl">Erro de certificado/SSL</span>Comum com antivírus que inspeciona HTTPS (ex. Avast). Rode <code class="inline">pip install pip-system-certs</code> e tente de novo.</div>
+  </section>
+
+  <!-- PASSO 6 -->
+  <section class="step" id="passo-6">
+    <div class="step-head"><div class="step-num">6</div><h2>Gerar uma chave de API nova na Bybit</h2></div>
+    <p>Esta parte é só sua — chave de API é credencial, não é algo que eu deva digitar por você.</p>
+    <ol>
+      <li>Entre em <a href="https://testnet.bybit.com" target="_blank" rel="noopener">testnet.bybit.com</a> e faça login.</li>
+      <li>Vá em Gerenciamento de API (API Management).</li>
+      <li>Crie uma chave nova — dê um nome que ajude a lembrar, como <code class="inline">PC2-motor-24h</code>.</li>
+      <li>Permissões: marque <strong>leitura e negociação</strong> (Read-Write + Trade).</li>
+      <li>Copie a <strong>API Key</strong> e o <strong>API Secret</strong> — o Secret só aparece uma vez.</li>
+    </ol>
+    <div class="warn"><span class="lbl">Nunca habilite</span>Permissão de saque (Withdraw). Não é necessária e não é segura.</div>
+  </section>
+
+  <!-- PASSO 7 -->
+  <section class="step" id="passo-7">
+    <div class="step-head"><div class="step-num">7</div><h2>Criar o arquivo .env com a chave nova</h2></div>
+    <div class="codepanel">
+      <div class="bar"><span>PowerShell</span><button class="copy" type="button">Copiar</button></div>
+      <pre><code>copy .env.example .env
+notepad .env</code></pre>
+    </div>
+    <p>Preencha assim, colando a Key e o Secret do passo anterior:</p>
+    <div class="codepanel">
+      <div class="bar"><span>.env</span><button class="copy" type="button">Copiar</button></div>
+      <pre><code>ENVIRONMENT=testnet
+BYBIT_TESTNET_API_KEY=<span class="c-dim">cole_a_key_aqui</span>
+BYBIT_TESTNET_API_SECRET=<span class="c-dim">cole_o_secret_aqui</span>
+BYBIT_MAINNET_API_KEY=
+BYBIT_MAINNET_API_SECRET=
+ANTHROPIC_API_KEY=
+LOG_LEVEL=INFO</code></pre>
+    </div>
+    <p>Salve (Ctrl+S) e feche o Bloco de Notas.</p>
+  </section>
+
+  <!-- PASSO 8 -->
+  <section class="step" id="passo-8">
+    <div class="step-head"><div class="step-num">8</div><h2>Testar antes de ligar de vez</h2></div>
+    <div class="warn"><span class="lbl">Nunca pule esta parte</span>Confirme que tudo funciona antes de deixar o motor mandando ordens de verdade.</div>
+    <div class="codepanel">
+      <div class="bar"><span>PowerShell · confirma saldo/conexão</span><button class="copy" type="button">Copiar</button></div>
+      <pre><code>python diag_saldo.py</code></pre>
+    </div>
+    <p>Deve mostrar o saldo da conta testnet sem erro. Se der erro, revise o <code class="inline">.env</code> — Key/Secret colados certos, sem espaço sobrando.</p>
+    <div class="codepanel">
+      <div class="bar"><span>PowerShell · um ciclo de teste, sem ordem real</span><button class="copy" type="button">Copiar</button></div>
+      <pre><code>python main.py --once</code></pre>
+    </div>
+    <p>Roda uma vez só, em modo seguro — não manda ordem nenhuma. Confira que não deu erro no final.</p>
+  </section>
+
+  <!-- PASSO 9 -->
+  <section class="step" id="passo-9">
+    <div class="step-head"><div class="step-num">9</div><h2>Deixar o PC sem suspender</h2></div>
+    <p>Como o motor vai ficar rodando 24h, o PC não pode dormir sozinho:</p>
+    <ol>
+      <li>Menu Iniciar → Configurações → Sistema → Energia e bateria.</li>
+      <li>Em "Tela e suspensão", mude tudo para <strong>Nunca</strong> — tanto a tela quanto a suspensão do PC.</li>
+    </ol>
+    <div class="tip"><span class="lbl">Se for notebook</span>Faça isso também para o modo "com bateria", não só "conectado na tomada" — ou deixe sempre no carregador.</div>
+  </section>
+
+  <!-- PASSO 10 -->
+  <section class="step" id="passo-10">
+    <div class="step-head"><div class="step-num">10</div><h2>Ligar de vez, 24 horas</h2></div>
+    <div class="codepanel">
+      <div class="bar"><span>PowerShell · início definitivo</span><button class="copy" type="button">Copiar</button></div>
+      <pre><code>cd C:\BybitAutoTrader
+.venv\Scripts\activate
+python supervisor.py --live</code></pre>
+    </div>
+    <p>Esse é o comando definitivo: roda o motor de verdade (ordens reais na testnet) e, se o processo cair sozinho, o <code class="inline">supervisor.py</code> religa automaticamente.</p>
+    <div class="warn"><span class="lbl">Deixe a janela aberta</span>Pode minimizar, não pode fechar — é nela que o motor está rodando.</div>
+  </section>
+
+  <!-- PARAR / ATUALIZAR -->
+  <section class="step">
+    <div class="step-head"><div class="step-num">✋</div><h2>Como parar com segurança</h2></div>
+    <p>Clique na janela do PowerShell onde o motor está rodando e aperte <strong>Ctrl+C uma vez só</strong>. Isso avisa o motor pra fechar de forma limpa — ele termina o que está fazendo e registra o encerramento.</p>
+    <div class="warn"><span class="lbl">Nunca faça isso</span>Fechar a janela no X ou matar o processo pelo Gerenciador de Tarefas — isso conta como queda/crash, não como parada de propósito.</div>
+  </section>
+
+  <section class="step">
+    <div class="step-head"><div class="step-num">↻</div><h2>Como atualizar o código no futuro</h2></div>
+    <p>Quando uma melhoria for testada e aprovada aqui no PC1, ela vai (<code class="inline">git push</code>) pro mesmo repositório. Pra trazer isso pro PC2:</p>
+    <ol>
+      <li>Pare o motor com segurança (Ctrl+C, como acima) — <strong>nunca</strong> atualize com o motor rodando.</li>
+      <li>Puxe a atualização:</li>
+    </ol>
+    <div class="codepanel">
+      <div class="bar"><span>PowerShell</span><button class="copy" type="button">Copiar</button></div>
+      <pre><code>cd C:\BybitAutoTrader
+git pull</code></pre>
+    </div>
+    <p>Religue com <code class="inline">python supervisor.py --live</code>.</p>
+  </section>
+
+  <!-- RESUMO -->
+  <section class="step" id="resumo">
+    <div class="step-head"><div class="step-num">⚡</div><h2>Resumo rápido</h2></div>
+    <p>Depois que tudo já estiver instalado, é só isto pra ligar de novo:</p>
+    <div class="summary">
+      <div class="codepanel" style="margin:0;">
+        <div class="bar"><span>PowerShell</span><button class="copy" type="button">Copiar</button></div>
+        <pre><code>cd C:\BybitAutoTrader
+.venv\Scripts\activate
+python supervisor.py --live</code></pre>
+      </div>
+      <p style="margin:16px 0 0; color:var(--ink-soft);">Para parar: <strong>Ctrl+C</strong> na mesma janela.</p>
+    </div>
+  </section>
+
+  <!-- PROBLEMAS -->
+  <section class="step" id="problemas">
+    <div class="step-head"><div class="step-num">?</div><h2>Problemas comuns</h2></div>
+
+    <details class="faq">
+      <summary>"python não é reconhecido como comando"</summary>
+      <p>O Python foi instalado sem marcar "Add to PATH". Reinstale marcando a caixinha (Passo 1).</p>
+    </details>
+    <details class="faq">
+      <summary>Erro de certificado/SSL no pip install ou ao rodar o motor</summary>
+      <p>Rode <code class="inline">pip install pip-system-certs</code> dentro do ambiente virtual ativo e tente de novo. Acontece com antivírus tipo Avast que inspeciona HTTPS.</p>
+    </details>
+    <details class="faq">
+      <summary>"gh repo clone" pede senha e não aceita</summary>
+      <p>O <code class="inline">gh auth login</code> do Passo 3 provavelmente não terminou certo. Rode <code class="inline">gh auth status</code> pra conferir; se não estiver logado, repita o Passo 3.</p>
+    </details>
+    <details class="faq">
+      <summary>O motor não abre posição nenhuma depois de horas rodando</summary>
+      <p>Na maioria das vezes não é bug — pode simplesmente não ter tido sinal de entrada ainda. Isso é esperado.</p>
+    </details>
+  </section>
+
+  <footer>
+    Guia gerado para o projeto Bybit Auto Trader · código completo em <code class="inline">PASSO-A-PASSO-PC2.md</code> no repositório.
+  </footer>
+
+</div>
+
+<script>
+  document.querySelectorAll('.codepanel .copy').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var codeEl = btn.closest('.codepanel').querySelector('code');
+      var text = codeEl.innerText;
+      var done = function () {
+        var original = btn.textContent;
+        btn.textContent = 'Copiado!';
+        setTimeout(function () { btn.textContent = original; }, 1600);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done).catch(function () { fallbackCopy(text, done); });
+      } else {
+        fallbackCopy(text, done);
+      }
+    });
+  });
+
+  function fallbackCopy(text, done) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+    done();
+  }
+</script>
