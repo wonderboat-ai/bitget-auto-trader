@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard Cripto — Dossiê Completo por Data</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js" integrity="sha384-iU8HYtnGQ8Cy4zl7gbNMOhsDTTKX02BTXptVP/vqAWIaTfM7isw76iyZCsjL2eVi" crossorigin="anonymous"></script>
+<style>
+  :root{
+    color-scheme: dark;
+    --bg:#080b09; --card:#10160f; --card-soft:#151d17; --ink:#eaf6ef; --muted:#8fa89c; --line:rgba(140,255,190,.14);
+    --accent:#3cf28a; --accent-soft:#8ffdc7; --accent-ink:#04150c; --accent-d:#22c274; --teal:#2dd4c8; --green:#3ddc84; --red:#ff5d75;
+    --yellow:#f2c14e; --violet:#a78bfa; --chip:rgba(255,255,255,.05);
+  }
+  /* mood do dia: o JS seta data-mood no <body> conforme o viés (long/short/neutro) do dossiê selecionado */
+  body[data-mood="short"]{--accent:#ff5d75; --accent-soft:#ffb3c0; --accent-d:#e23f5c; --accent-ink:#2b0710;}
+  body[data-mood="neutro"]{--accent:#f2c14e; --accent-soft:#ffe29a; --accent-d:#d9a52e; --accent-ink:#2b1c02;}
+  body[data-mood="long"]{--accent:#3cf28a; --accent-soft:#8ffdc7; --accent-d:#22c274; --accent-ink:#04150c;}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,Helvetica,Arial,sans-serif;
+    background:
+      radial-gradient(1100px 560px at 12% -12%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 60%),
+      radial-gradient(900px 500px at 105% 8%, rgba(45,212,200,.09), transparent 55%),
+      var(--bg);
+    color:var(--ink);line-height:1.55;padding:16px 16px 70px;position:relative;transition:background .4s ease;}
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.05;mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");}
+  ::-webkit-scrollbar{width:10px;height:10px;}
+  ::-webkit-scrollbar-track{background:var(--bg);}
+  ::-webkit-scrollbar-thumb{background:#1c2a22;border-radius:8px;}
+  ::-webkit-scrollbar-thumb:hover{background:#25392e;}
+  .wrap{max-width:1080px;margin:0 auto;position:relative;z-index:1;}
+
+  .head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;}
+  h1{font-size:20px;font-weight:800;display:flex;align-items:center;gap:9px;}
+  h1 .dot{width:11px;height:11px;border-radius:50%;background:var(--accent);
+    box-shadow:0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent),0 0 14px color-mix(in srgb, var(--accent) 60%, transparent);
+    transition:background .35s ease,box-shadow .35s ease;}
+  .topnote{color:var(--muted);font-size:12.5px;margin-top:3px;}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;}
+  .btn{border:none;border-radius:9px;padding:8px 13px;font-size:13px;font-weight:700;cursor:pointer;
+    font-family:inherit;display:inline-flex;align-items:center;gap:6px;transition:filter .15s,transform .07s,background .15s;}
+  .btn:active{transform:translateY(1px);}
+  .btn-pri{background:var(--accent);color:var(--accent-ink);
+    box-shadow:0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent),0 6px 18px color-mix(in srgb, var(--accent) 28%, transparent);
+    transition:filter .15s,transform .07s,background .3s ease,box-shadow .3s ease,color .3s ease;} .btn-pri:hover{filter:brightness(1.1);}
+  .btn-soft{background:var(--chip);color:var(--ink);border:1px solid var(--line);} .btn-soft:hover{background:rgba(255,255,255,.09);}
+  .btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--line);}
+  .btn-ghost:hover{background:var(--chip);}
+
+  /* navigator */
+  .nav{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin:16px 0 14px;
+    background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;}
+  .nav .arrow{width:34px;height:34px;border-radius:9px;border:1px solid var(--line);background:var(--card-soft);
+    cursor:pointer;font-size:16px;color:var(--ink);}
+  .nav .arrow:hover{background:rgba(255,255,255,.08);}
+  .nav select,.nav input{border:1px solid var(--line);background:var(--card-soft);color:var(--ink);
+    border-radius:9px;padding:9px 11px;font-size:13.5px;font-family:inherit;}
+  .nav select#daySel{font-weight:700;min-width:190px;}
+  .nav input[type=search]{flex:1;min-width:170px;}
+  .nav input::placeholder{color:var(--muted);}
+  .nav .cnt{color:var(--muted);font-size:12px;margin-left:auto;}
+
+  /* kpis */
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:11px;margin-bottom:14px;}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:13px 14px;}
+  .kpi .lbl{font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);font-weight:700;}
+  .kpi .val{font-size:21px;font-weight:800;margin-top:5px;}
+  .kpi .sub{font-size:11.5px;color:var(--muted);margin-top:2px;}
+  .up{color:var(--green);} .down{color:var(--red);}
+  .pill{display:inline-block;font-size:12px;font-weight:800;border-radius:20px;padding:3px 12px;}
+  .p-long{background:rgba(61,220,132,.16);color:var(--green);}
+  .p-short{background:rgba(255,93,117,.16);color:var(--red);}
+  .p-neutro{background:rgba(242,193,78,.16);color:var(--yellow);}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px 16px;margin-bottom:14px;}
+  .card > h2{font-size:13px;font-weight:800;letter-spacing:.2px;margin-bottom:11px;color:var(--muted);
+    text-transform:uppercase;display:flex;justify-content:space-between;align-items:center;}
+  canvas{width:100%!important;max-height:200px;}
+
+  /* dossier full render */
+  .lead{background:radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 55%), var(--card);
+    border:1px solid var(--line);border-left:4px solid var(--accent);
+    border-radius:12px;padding:16px 18px;margin-bottom:14px;transition:border-color .35s ease,background .35s ease;}
+  .lead .title{font-size:18px;font-weight:800;color:var(--accent-soft);}
+  .lead .meta{font-size:13.5px;color:var(--ink);margin-top:6px;}
+  .lead .meta strong{font-weight:700;}
+
+  .sections{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  @media(max-width:780px){.sections{grid-template-columns:1fr;}}
+  .sec{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px 16px;}
+  .sec.span2{grid-column:1 / -1;}
+  .sec .sh{font-size:14px;font-weight:800;color:var(--accent-d);margin-bottom:9px;display:flex;align-items:center;gap:8px;}
+  .sec .sh .ix{background:var(--accent);color:var(--accent-ink);width:24px;height:24px;border-radius:7px;
+    display:grid;place-items:center;font-size:12px;font-weight:800;flex:none;
+    box-shadow:0 0 12px color-mix(in srgb, var(--accent) 50%, transparent);transition:background .35s ease,box-shadow .35s ease;}
+
+  .doc{font-size:13.5px;color:var(--ink);}
+  .doc h3.dh{font-size:14px;font-weight:800;margin:13px 0 6px;color:var(--accent-d);}
+  .doc h4.dh{font-size:13px;font-weight:700;margin:11px 0 4px;color:var(--ink);}
+  .doc p{margin:6px 0;}
+  .doc strong{font-weight:700;color:var(--ink);}
+  .doc table{border-collapse:collapse;width:100%;margin:9px 0;font-size:12.5px;}
+  .doc th,.doc td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top;}
+  .doc th{background:var(--chip);font-weight:700;color:var(--ink);}
+  .doc ul{margin:6px 0 6px 18px;} .doc li{margin:3px 0;}
+  .doc a{color:var(--teal);word-break:break-word;}
+  blockquote,.doc > p.quote{border-left:3px solid var(--teal);background:rgba(45,212,200,.08);
+    padding:7px 12px;border-radius:0 8px 8px 0;margin:8px 0;color:#a9f0e8;}
+
+  .footerbar{display:flex;gap:9px;justify-content:flex-end;margin-top:6px;}
+  .empty{color:var(--muted);font-size:13.5px;text-align:center;padding:40px 14px;
+    background:var(--card);border:1px dashed var(--line);border-radius:12px;}
+
+  /* modal */
+  .modal-bg{position:fixed;inset:0;background:rgba(2,8,5,.72);display:none;align-items:flex-start;
+    justify-content:center;padding:26px 14px;overflow:auto;z-index:50;}
+  .modal-bg.show{display:flex;}
+  .modal{background:var(--card);border-radius:14px;max-width:780px;width:100%;padding:20px;border:1px solid var(--line);
+    box-shadow:0 20px 60px rgba(0,0,0,.5);}
+  .modal h2{font-size:16px;font-weight:800;margin-bottom:13px;}
+  .frow{display:flex;gap:11px;flex-wrap:wrap;margin-bottom:11px;}
+  .field{flex:1;min-width:140px;}
+  .field label{display:block;font-size:10.5px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);font-weight:700;margin-bottom:5px;}
+  .field input,.field select,.field textarea{width:100%;border:1px solid var(--line);border-radius:9px;
+    padding:9px 11px;font-size:13.5px;font-family:inherit;color:var(--ink);background:var(--card-soft);}
+  .field input::placeholder,.field textarea::placeholder{color:var(--muted);}
+  .field textarea{min-height:240px;resize:vertical;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.5;}
+  .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:4px;}
+  .tip{font-size:12px;color:var(--muted);background:var(--chip);border-radius:9px;padding:9px 11px;margin-bottom:12px;border:1px solid var(--line);}
+  .hidden{display:none;}
+
+  /* decoração de fundo (crypto/trade) — reage ao mood via currentColor/var(--accent) */
+  .bg-deco{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;}
+  .bg-deco svg{position:absolute;color:var(--accent);transition:color .4s ease;}
+  .bg-deco .deco-hex{top:-30px;right:-40px;width:320px;height:320px;opacity:.11;}
+  .bg-deco .deco-hex polygon{fill:none;stroke:currentColor;stroke-width:1.5;}
+  .bg-deco .deco-candles{left:0;bottom:34px;width:100%;height:96px;opacity:.05;}
+  .bg-deco .deco-candles line,.bg-deco .deco-candles rect{stroke:currentColor;fill:currentColor;}
+  /* silhuetas de criptomoedas (outline, bem discretas) */
+  .bg-deco .deco-btc{left:-70px;top:24%;width:330px;height:330px;opacity:.055;}
+  .bg-deco .deco-eth{right:26px;top:46%;width:180px;height:234px;opacity:.055;}
+  .bg-deco .deco-coin{left:38px;top:7%;width:100px;height:100px;opacity:.05;}
+  .bg-deco .deco-btc *,.bg-deco .deco-eth *,.bg-deco .deco-coin *{fill:none;stroke:currentColor;}
+  .bg-deco .deco-mono{position:absolute;left:18px;bottom:12px;font-family:ui-monospace,Menlo,Consolas,monospace;
+    font-size:11px;letter-spacing:1.5px;color:color-mix(in srgb, var(--accent) 55%, var(--muted));opacity:.55;white-space:nowrap;
+    transition:color .4s ease;}
+  @media(max-width:780px){.bg-deco .deco-hex{width:200px;height:200px;top:-20px;right:-50px;} .bg-deco .deco-candles{opacity:.035;}
+    .bg-deco .deco-btc,.bg-deco .deco-eth,.bg-deco .deco-coin{display:none;}
+    .bg-deco .deco-mono{font-size:9.5px;left:12px;}}
+</style>
+</head>
+<body>
+
+<div class="bg-deco" aria-hidden="true">
+  <svg class="deco-hex" viewBox="0 0 300 300" xmlns="http://www.w3.org/2000/svg">
+    <polygon points="230,30 282,60 282,120 230,150 178,120 178,60"/>
+    <polygon points="255,152 288,171 288,209 255,228 222,209 222,171"/>
+    <polygon points="185,189 207.5,202 207.5,228 185,241 162.5,228 162.5,202"/>
+  </svg>
+  <svg class="deco-btc" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="100" cy="100" r="88" stroke-width="3"/>
+    <g stroke-width="7" stroke-linecap="round">
+      <path d="M78 55 V145"/>
+      <path d="M78 55 H112 a22 22 0 0 1 0 44 H78"/>
+      <path d="M78 99 H118 a23 23 0 0 1 0 46 H78"/>
+      <path d="M88 42 V55 M104 42 V55 M88 145 V158 M104 145 V158"/>
+    </g>
+  </svg>
+  <svg class="deco-eth" viewBox="0 0 200 260" xmlns="http://www.w3.org/2000/svg">
+    <g stroke-width="4" stroke-linejoin="round">
+      <path d="M100 18 L168 128 L100 170 L32 128 Z"/>
+      <path d="M100 18 V170"/>
+      <path d="M32 148 L100 242 L168 148 L100 190 Z"/>
+    </g>
+  </svg>
+  <svg class="deco-coin" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="60" cy="60" r="52" stroke-width="3"/>
+    <circle cx="60" cy="60" r="38" stroke-width="2" opacity=".7"/>
+  </svg>
+  <svg class="deco-candles" viewBox="0 0 400 100" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+    <line x1="15" y1="15" x2="15" y2="85"/><rect x="10" y="40" width="10" height="30"/>
+    <line x1="55" y1="25" x2="55" y2="75"/><rect x="50" y="45" width="10" height="20"/>
+    <line x1="95" y1="10" x2="95" y2="70"/><rect x="90" y="20" width="10" height="35"/>
+    <line x1="135" y1="30" x2="135" y2="90"/><rect x="130" y="55" width="10" height="25"/>
+    <line x1="175" y1="20" x2="175" y2="80"/><rect x="170" y="35" width="10" height="32"/>
+    <line x1="215" y1="35" x2="215" y2="95"/><rect x="210" y="60" width="10" height="18"/>
+    <line x1="255" y1="8" x2="255" y2="68"/><rect x="250" y="22" width="10" height="38"/>
+    <line x1="295" y1="28" x2="295" y2="88"/><rect x="290" y="50" width="10" height="28"/>
+    <line x1="335" y1="18" x2="335" y2="78"/><rect x="330" y="38" width="10" height="24"/>
+    <line x1="375" y1="32" x2="375" y2="92"/><rect x="370" y="58" width="10" height="22"/>
+  </svg>
+  <div class="deco-mono">01001101 · 01000010 · 01010100 · 01000011 · BTC/USDT · ETH/USDT</div>
+</div>
+
+<div class="wrap">
+
+  <div class="head">
+    <div>
+      <h1><span class="dot"></span> Dashboard Cripto — Dossiê Completo</h1>
+      <div class="topnote">Página única com o dossiê inteiro do dia. Navegue por data, pesquise e acompanhe a evolução.</div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-pri" id="addBtn">＋ Salvar dossiê do dia</button>
+      <button class="btn btn-soft" id="genBtn">⟳ Gerar hoje</button>
+      <button class="btn btn-ghost" id="exportBtn">⬇ Exportar</button>
+      <button class="btn btn-ghost" id="importBtn">⬆ Importar</button>
+      <input type="file" id="importFile" accept="application/json" class="hidden">
+    </div>
+  </div>
+
+  <div class="nav">
+    <button class="arrow" id="prevBtn" title="Dia anterior">‹</button>
+    <select id="daySel"></select>
+    <button class="arrow" id="nextBtn" title="Próximo dia">›</button>
+    <input type="search" id="search" placeholder="Pesquisar no histórico (ex.: CPI, NEAR, funding)…">
+    <select id="biasFilter" title="Filtrar por viés">
+      <option value="">Todos os viés</option>
+      <option value="long">Long</option><option value="short">Short</option><option value="neutro">Neutro</option>
+    </select>
+    <span class="cnt" id="cnt"></span>
+  </div>
+
+  <div id="content"></div>
+
+</div>
+
+<!-- EDITOR -->
+<div class="modal-bg" id="modal">
+  <div class="modal">
+    <h2 id="modalTitle">Salvar dossiê do dia</h2>
+    <div class="tip">Clique em <b>Gerar hoje</b> para a tarefa rodar no chat; copie o resultado e cole em <b>Dossiê completo</b>. O texto é renderizado por seções automaticamente. Os campos de resumo alimentam os KPIs e o gráfico.</div>
+    <div class="frow">
+      <div class="field" style="max-width:165px"><label>Data</label><input type="date" id="fDate"></div>
+      <div class="field" style="max-width:165px"><label>Preço BTC (US$)</label><input type="number" id="fPrice" placeholder="63500"></div>
+      <div class="field" style="max-width:155px"><label>Viés</label>
+        <select id="fBias"><option value="">—</option><option value="long">Long</option><option value="short">Short</option><option value="neutro">Neutro</option></select>
+      </div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>Funding</label><input type="text" id="fFunding" placeholder="+10% a.a. (não esticado)"></div>
+      <div class="field"><label>Fear &amp; Greed</label><input type="text" id="fFG" placeholder="28 (medo)"></div>
+      <div class="field"><label>Fluxo ETF</label><input type="text" id="fETF" placeholder="-US$ 4,33 bi (13d)"></div>
+    </div>
+    <div class="field" style="margin-bottom:12px"><label>Dossiê completo (cole aqui — Markdown)</label><textarea id="fText" placeholder="Cole o dossiê das 8 partes aqui…"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="cancelBtn">Cancelar</button>
+      <button class="btn btn-pri" id="saveBtn">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const KEY="WH_CRIPTO_DOSSIE_V1", TASK_ID="dossie-cripto-diario";
+let data=load(), selDate=null, chart=null;
+
+function load(){ try{return JSON.parse(localStorage.getItem(KEY))||[];}catch(e){return [];} }
+function save(){ localStorage.setItem(KEY,JSON.stringify(data)); }
+function today(){ return new Date().toISOString().slice(0,10); }
+function fmtDate(s){ if(!s)return""; const [y,m,d]=s.split("-"); return `${d}/${m}/${y}`; }
+function esc(s){ return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function sorted(){ return [...data].sort((a,b)=>b.date.localeCompare(a.date)); }
+
+/* ---- mood do dia (long/short/neutro) — pinta tema e gráfico conforme a tendência lida no dossiê ---- */
+function moodRGB(bias){
+  if(bias==="short") return "255,93,117";
+  if(bias==="long") return "60,242,138";
+  if(bias==="neutro") return "242,193,78";
+  return "140,168,158";
+}
+function applyMood(bias){ document.body.dataset.mood = bias || "neutro"; }
+
+/* ---- mini markdown ---- */
+function inline(t){ return esc(t)
+  .replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>")
+  .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>'); }
+function md(src){
+  const lines=(src||"").replace(/\r/g,"").split("\n");
+  let html="",i=0,inUl=false,inTable=false;
+  const closeUl=()=>{if(inUl){html+="</ul>";inUl=false;}};
+  const closeTable=()=>{if(inTable){html+="</tbody></table>";inTable=false;}};
+  while(i<lines.length){
+    let ln=lines[i];
+    if(/^\s*\|.*\|\s*$/.test(ln)){
+      const cells=ln.trim().replace(/^\||\|$/g,"").split("|").map(c=>c.trim());
+      const next=lines[i+1]||"";
+      if(!inTable){
+        if(/^\s*\|?[\s:\-\|]+\|?\s*$/.test(next)){ closeUl();
+          html+='<table><thead><tr>'+cells.map(c=>`<th>${inline(c)}</th>`).join("")+"</tr></thead><tbody>";
+          inTable=true; i+=2; continue; }
+      } else {
+        if(/^\s*\|?[\s:\-\|]+\|?\s*$/.test(ln)){ i++; continue; }
+        html+="<tr>"+cells.map(c=>`<td>${inline(c)}</td>`).join("")+"</tr>"; i++; continue;
+      }
+    } else { closeTable(); }
+    let m;
+    if((m=ln.match(/^>\s?(.*)/))){ closeUl(); html+=`<p class="quote">${inline(m[1])}</p>`; }
+    else if((m=ln.match(/^####?\s+(.*)/))){ closeUl(); html+=`<h4 class="dh">${inline(m[1])}</h4>`; }
+    else if((m=ln.match(/^###\s+(.*)/))){ closeUl(); html+=`<h4 class="dh">${inline(m[1])}</h4>`; }
+    else if(/^\s*---\s*$/.test(ln)){ closeUl(); }
+    else if((m=ln.match(/^\s*[-*]\s+(.*)/))){ if(!inUl){html+="<ul>";inUl=true;} html+=`<li>${inline(m[1])}</li>`; }
+    else if(ln.trim()===""){ closeUl(); }
+    else { closeUl(); html+=`<p>${inline(ln)}</p>`; }
+    i++;
+  }
+  closeUl(); closeTable(); return html;
+}
+
+/* split full dossier into lead + parte sections */
+function splitSections(text){
+  if(!text) return {lead:"",secs:[]};
+  const parts=text.split(/\n(?=##\s+)/);
+  let lead=""; const secs=[];
+  parts.forEach((chunk,idx)=>{
+    if(idx===0 && !/^##\s+/.test(chunk)){ lead=chunk.trim(); }
+    else{
+      const m=chunk.match(/^##\s+(.*)/);
+      const title=m?m[1].trim():"Seção";
+      const body=chunk.replace(/^##\s+.*\n?/,"");
+      secs.push({title,body});
+    }
+  });
+  return {lead,secs};
+}
+/* sections that should span full width (tables / long) */
+function isWide(title){ return /(calend|posicion|matriz|síntese|sintese|t[ée]cnica)/i.test(title); }
+
+/* ---- KPIs for a given date ---- */
+function kpiHtml(date){
+  const s=sorted(); const i=s.findIndex(x=>x.date===date);
+  const cur=s[i], prev=s[i+1];
+  if(!cur) return "";
+  let pr="—",delta="registro selecionado";
+  if(cur.price){
+    pr="US$ "+Number(cur.price).toLocaleString("pt-BR");
+    if(prev&&prev.price){
+      const d=(cur.price-prev.price)/prev.price*100, cls=d>=0?"up":"down", sg=d>=0?"▲":"▼";
+      delta=`<span class="${cls}">${sg} ${Math.abs(d).toFixed(2)}% vs ${fmtDate(prev.date)}</span>`;
+    }
+  }
+  const bp=cur.bias?`<span class="pill p-${cur.bias}">${cur.bias.toUpperCase()}</span>`:"—";
+  return `<div class="kpis">
+    <div class="kpi"><div class="lbl">Preço BTC</div><div class="val">${pr}</div><div class="sub">${delta}</div></div>
+    <div class="kpi"><div class="lbl">Viés</div><div class="val" style="font-size:17px;margin-top:8px">${bp}</div><div class="sub">${fmtDate(cur.date)}</div></div>
+    <div class="kpi"><div class="lbl">Funding</div><div class="val" style="font-size:14px;margin-top:9px">${esc(cur.funding||"—")}</div></div>
+    <div class="kpi"><div class="lbl">Fear &amp; Greed</div><div class="val" style="font-size:14px;margin-top:9px">${esc(cur.fg||"—")}</div></div>
+    <div class="kpi"><div class="lbl">Fluxo ETF</div><div class="val" style="font-size:14px;margin-top:9px">${esc(cur.etf||"—")}</div></div>
+  </div>`;
+}
+
+/* ---- main render of selected day (full page) ---- */
+function renderContent(){
+  const box=document.getElementById("content");
+  if(!data.length){ applyMood(null); box.innerHTML=`<div class="empty">Nenhum dossiê salvo ainda.<br>Clique em <b>Salvar dossiê do dia</b> ou <b>Importar</b> um arquivo JSON.</div>`; return; }
+  const e=data.find(x=>x.date===selDate);
+  if(!e){ applyMood(null); box.innerHTML=`<div class="empty">Selecione uma data.</div>`; return; }
+  applyMood(e.bias);
+  const {lead,secs}=splitSections(e.fullText);
+  let secHtml = secs.length ? `<div class="sections">`+secs.map((s,ix)=>`
+      <div class="sec ${isWide(s.title)?'span2':''}">
+        <div class="sh"><span class="ix">${ix+1}</span>${esc(s.title)}</div>
+        <div class="doc">${md(s.body)}</div>
+      </div>`).join("")+`</div>`
+    : (e.fullText? `<div class="card"><div class="doc">${md(e.fullText)}</div></div>`
+      : `<div class="empty">Sem texto salvo para ${fmtDate(e.date)}. Clique em Editar para adicionar.</div>`);
+
+  box.innerHTML =
+    kpiHtml(e.date) +
+    `<div class="card"><h2>Evolução do preço do BTC <span id="cc"></span></h2><canvas id="priceChart"></canvas></div>` +
+    (lead?`<div class="lead">${md(lead).replace('<h3 class="dh"','<div class="title"').replace('</h3>','</div>')}</div>`:"") +
+    secHtml +
+    `<div class="footerbar">
+       <button class="btn btn-ghost" id="editBtn">✎ Editar este dia</button>
+       <button class="btn btn-ghost" id="delBtn" style="color:var(--red);border-color:rgba(255,93,117,.4)">🗑 Excluir</button>
+     </div>`;
+
+  document.getElementById("editBtn").onclick=()=>openModal(e);
+  document.getElementById("delBtn").onclick=()=>{
+    if(confirm("Excluir o dossiê de "+fmtDate(e.date)+"?")){
+      data=data.filter(x=>x.date!==e.date); save(); pickDefault(); renderAll();
+    }
+  };
+  renderChart(e.date);
+}
+
+function renderChart(active){
+  const pts=sorted().filter(e=>e.price).reverse();
+  const cc=document.getElementById("cc"); if(cc) cc.textContent=pts.length?`(${pts.length} pts)`:"";
+  const ctx=document.getElementById("priceChart"); if(!ctx) return;
+  if(typeof Chart==="undefined") return; /* CDN indisponível — dashboard segue funcional sem o gráfico */
+  if(chart) chart.destroy();
+  if(!pts.length){ return; }
+  const activeEntry=pts.find(p=>p.date===active);
+  const lineRGB=moodRGB(activeEntry?activeEntry.bias:null);
+  chart=new Chart(ctx,{type:"line",
+    data:{labels:pts.map(p=>fmtDate(p.date)),
+      datasets:[{label:"BTC US$",data:pts.map(p=>p.price),borderColor:`rgb(${lineRGB})`,
+        backgroundColor:`rgba(${lineRGB},.14)`,fill:true,tension:.25,borderWidth:2,
+        pointRadius:pts.map(p=>p.date===active?6:3),
+        pointBorderWidth:pts.map(p=>p.date===active?2:0),
+        pointBorderColor:pts.map(p=>p.date===active?`rgb(${lineRGB})`:"transparent"),
+        pointBackgroundColor:pts.map(p=>`rgb(${moodRGB(p.bias)})`)}]},
+    options:{responsive:true,plugins:{legend:{display:false}},
+      scales:{y:{ticks:{color:"#8fa89c",callback:v=>"$"+(v/1000).toFixed(0)+"k"},grid:{color:"rgba(255,255,255,.06)"}},
+              x:{ticks:{color:"#8fa89c"},grid:{color:"rgba(255,255,255,.04)"}}}}});
+}
+
+/* ---- navigator ---- */
+function visibleDates(){
+  const q=(document.getElementById("search").value||"").toLowerCase();
+  const bf=document.getElementById("biasFilter").value;
+  return sorted().filter(e=>{
+    if(bf&&e.bias!==bf) return false;
+    if(q&&!((e.fullText||"")+" "+e.date).toLowerCase().includes(q)) return false;
+    return true;
+  }).map(e=>e.date);
+}
+function renderNav(){
+  const dates=visibleDates();
+  const sel=document.getElementById("daySel");
+  sel.innerHTML=dates.map(d=>{
+    const e=data.find(x=>x.date===d);
+    const tag=e&&e.bias?` · ${e.bias}`:"";
+    return `<option value="${d}">${fmtDate(d)}${tag}</option>`;
+  }).join("");
+  if(dates.length && !dates.includes(selDate)) selDate=dates[0];
+  if(dates.includes(selDate)) sel.value=selDate;
+  document.getElementById("cnt").textContent=`${dates.length} de ${data.length} registros`;
+  const i=dates.indexOf(selDate);
+  document.getElementById("prevBtn").disabled=i>=dates.length-1;
+  document.getElementById("nextBtn").disabled=i<=0;
+}
+function pickDefault(){ const s=sorted(); selDate=s.length?s[0].date:null; }
+
+function renderAll(){ renderNav(); renderContent(); }
+
+/* ---- editor ---- */
+function openModal(entry){
+  document.getElementById("modalTitle").textContent=entry?"Editar dossiê":"Salvar dossiê do dia";
+  document.getElementById("fDate").value=entry?entry.date:today();
+  document.getElementById("fPrice").value=entry&&entry.price?entry.price:"";
+  document.getElementById("fBias").value=entry?entry.bias||"":"";
+  document.getElementById("fFunding").value=entry?entry.funding||"":"";
+  document.getElementById("fFG").value=entry?entry.fg||"":"";
+  document.getElementById("fETF").value=entry?entry.etf||"":"";
+  document.getElementById("fText").value=entry?entry.fullText||"":"";
+  document.getElementById("modal").classList.add("show");
+}
+function closeModal(){ document.getElementById("modal").classList.remove("show"); }
+document.getElementById("saveBtn").onclick=()=>{
+  const d=document.getElementById("fDate").value; if(!d){alert("Informe a data.");return;}
+  const entry={date:d,
+    price:document.getElementById("fPrice").value?Number(document.getElementById("fPrice").value):null,
+    bias:document.getElementById("fBias").value,
+    funding:document.getElementById("fFunding").value.trim(),
+    fg:document.getElementById("fFG").value.trim(),
+    etf:document.getElementById("fETF").value.trim(),
+    fullText:document.getElementById("fText").value, savedAt:Date.now()};
+  const idx=data.findIndex(x=>x.date===d);
+  if(idx>=0) data[idx]=entry; else data.push(entry);
+  save(); closeModal(); selDate=d; renderAll();
+};
+document.getElementById("addBtn").onclick=()=>openModal(null);
+document.getElementById("cancelBtn").onclick=closeModal;
+document.getElementById("modal").onclick=(e)=>{ if(e.target.id==="modal") closeModal(); };
+
+/* nav events */
+document.getElementById("daySel").onchange=(e)=>{ selDate=e.target.value; renderContent(); renderNav(); };
+document.getElementById("prevBtn").onclick=()=>{ const ds=visibleDates(); const i=ds.indexOf(selDate); if(i<ds.length-1){selDate=ds[i+1]; renderAll();} };
+document.getElementById("nextBtn").onclick=()=>{ const ds=visibleDates(); const i=ds.indexOf(selDate); if(i>0){selDate=ds[i-1]; renderAll();} };
+document.getElementById("search").oninput=()=>{ const ds=visibleDates(); if(ds.length&&!ds.includes(selDate))selDate=ds[0]; renderAll(); };
+document.getElementById("biasFilter").onchange=()=>{ const ds=visibleDates(); if(ds.length&&!ds.includes(selDate))selDate=ds[0]; renderAll(); };
+
+document.getElementById("genBtn").onclick=async()=>{
+  try{
+    if(window.cowork&&window.cowork.runScheduledTask){
+      await window.cowork.runScheduledTask(TASK_ID);
+      alert("Tarefa disparada. O dossiê vai aparecer no chat — copie e cole aqui em 'Salvar dossiê do dia'.");
+    } else throw new Error("x");
+  }catch(err){ alert("Rode pela seção 'Scheduled' na barra lateral e depois cole o resultado aqui."); }
+};
+
+document.getElementById("exportBtn").onclick=()=>{
+  const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download="historico-dossie-cripto.json"; a.click();
+};
+document.getElementById("importBtn").onclick=()=>document.getElementById("importFile").click();
+document.getElementById("importFile").onchange=(e)=>{
+  const f=e.target.files[0]; if(!f) return; const r=new FileReader();
+  r.onload=()=>{ try{
+    const arr=JSON.parse(r.result);
+    if(Array.isArray(arr)){ const map={}; [...data,...arr].forEach(x=>{if(x&&x.date)map[x.date]=x;});
+      data=Object.values(map); save(); pickDefault(); renderAll(); alert("Importado: "+arr.length+" registro(s).");
+    } else alert("Arquivo inválido."); }catch(err){ alert("Erro ao ler o arquivo."); } };
+  r.readAsText(f);
+};
+
+pickDefault(); renderAll();
+</script>
+</body>
+</html>

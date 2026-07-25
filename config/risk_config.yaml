@@ -1,0 +1,116 @@
+# =============================================================
+# Configuração de RISCO — o coração do sistema.
+# Estes limites são NÃO-NEGOCIÁVEIS em runtime. O motor de decisão
+# (e futuramente o LLM) não pode reescrevê-los. Mudança aqui é manual.
+# =============================================================
+
+market:
+  # "perp" = perpétuos USDT (comportamento original) | "spot" = à vista.
+  # Decisão #E do Lucas (15/07/2026): migrar para SPOT (Bybit Brasil) — perpétuos
+  # ficaram inviáveis para residente BR. Em spot o sistema é FAIL-CLOSED:
+  # sinais SHORT são vetados, alavancagem forçada a 1, exposição total limitada
+  # a 1x o equity (sem margem). Virar para "spot" é mudança manual e deliberada,
+  # como tudo neste arquivo.
+  type: "spot"
+
+account:
+  # Capital de referência para sizing (em USDT). Em testnet, valor fictício.
+  base_capital_usdt: 1000.0
+
+per_trade:
+  # % do capital arriscado por trade (distância até o stop define o size).
+  risk_pct: 0.5            # 0.5% do capital por trade
+  # Stop-loss é OBRIGATÓRIO. Sem stop, o trade é vetado.
+  require_stop_loss: true
+  # Alavancagem máxima permitida por posição.
+  max_leverage: 3
+  # Teto de capital por trade INDIVIDUAL, em % do equity (decisão do Lucas,
+  # 17/07/2026). Motivo: o sizing por risco fixo (risk_pct / distância do
+  # stop) não tinha teto próprio — só o agregado de portfólio (abaixo). Com
+  # stop apertado, um único trade podia consumir quase todo o equity (visto
+  # ao vivo: ~84% numa entrada só). Quando o size pelo risco excederia este
+  # teto, o RiskManager REDUZ o tamanho pra caber (nunca aumenta risco, só
+  # diminui) — a entrada acontece, só menor, deixando caixa pra outros trades.
+  max_notional_pct_equity: 20.0
+
+portfolio:
+  # Nº máximo de posições abertas simultâneas.
+  max_open_positions: 3
+  # Exposição nocional máxima como múltiplo do capital base.
+  max_total_exposure_mult: 2.0
+  # Risco agregado máximo em aberto (soma do risco de todas as posições).
+  max_aggregate_risk_pct: 2.0
+
+drawdown:
+  # Perda diária máxima (%) antes do KILL SWITCH disparar.
+  # Ao atingir: zera exposição e BLOQUEIA novas entradas até reset manual.
+  max_daily_drawdown_pct: 3.0
+  # Perda máxima total desde o início antes de parada total.
+  max_total_drawdown_pct: 15.0
+
+cooldown:
+  # Pausa entradas NOVAS no mesmo símbolo depois de stops seguidos — decisão
+  # do Lucas em 21/07/2026, depois que o watchdog agendado achou um whipsaw
+  # real no ETH/USDT: 5 stops em 8 minutos, porque nada impedia reentrada
+  # imediata no mesmo sinal (candle de 15m ainda não tinha virado — a mesma
+  # aprovação repetia). Investigado (research/ + workflow de análise):
+  # confirmado que o ETH real não se moveu no mercado (mainnet ficou
+  # lateral); foi anomalia de dado da testnet, mas o problema de ARQUITETURA
+  # é real independente da causa — nada impedia reentrada repetida. Trata o
+  # SINTOMA (chop/reentrada), não a causa específica — funciona tanto pra
+  # dado ruim de exchange quanto pra whipsaw real de mercado.
+  consecutive_stops_trigger: 2   # nº de stops seguidos no mesmo símbolo que aciona o cooldown
+  cooldown_minutes_first: 30     # duração do 1º acionamento do dia (UTC) por símbolo
+  cooldown_minutes_escalated: 60 # duração do 2º acionamento em diante, mesmo dia
+
+circuit_breakers:
+  # Funding rate anômalo (abs) que suspende novas entradas.
+  max_abs_funding_rate: 0.003
+  # Usado SÓ quando ENVIRONMENT=testnet: lá o funding vive no clamp da exchange
+  # (±0.005) por book raso, o que vetava toda entrada da Fase 1. Mainnet não muda.
+  max_abs_funding_rate_testnet: 0.01
+  # Segundos sem dado novo de mercado antes de considerar feed perdido.
+  max_data_staleness_sec: 60
+  # Slippage máximo tolerado vs preço esperado (%) — acima disso, cancela.
+  max_slippage_pct: 0.5
+
+decision:
+  # Qual camada de decisão gera o Signal: "deterministic" (Fase 1/2) ou "llm" (Fase 3).
+  strategy: "deterministic"
+  # Chaves da estratégia determinística — construídas e testadas em 21/07/2026
+  # (saída por sinal + trailing stop), mas deixadas OFF até hoje por decisão
+  # explícita do Lucas. Ligadas em 22/07/2026 a pedido dele, depois da
+  # pesquisa 2b confirmar (2 datasets independentes) que a estratégia atual
+  # (EMA20/50+RSI, stop/TP fixos) é a PIOR família testada — nenhuma
+  # alternativa (donchian/ema_cross) validou edge suficiente pra promoção,
+  # então a melhoria disponível agora é de GESTÃO DE SAÍDA na mesma
+  # estratégia, não de troca de família (ver
+  # research/RELATORIO-2026-07-21-pesquisa-2b.md).
+  deterministic:
+    # Sobe o stop junto com o preço em vez de deixar fixo — trava lucro que
+    # já rodou a favor em vez de devolver tudo até o stop original numa
+    # reversão. TP passa a ser None quando trailing=true (o stop que sobe É
+    # a realização, ver Signal.trailing/executor.py). Só afeta ENTRADAS
+    # NOVAS a partir de agora — as posições já abertas antes deste boot
+    # mantêm o stop/TP fixo com que foram abertas.
+    trailing: true
+  # Config da camada Claude (usada só quando strategy: llm).
+  llm:
+    # Atualizado 22/07/2026 — "claude-sonnet-4-6" estava desatualizado
+    # (pendência já sinalizada no CLAUDE.md desde a implementação original).
+    model: "claude-sonnet-5"
+    temperature: 0.2
+    min_conviction: 0.6   # abaixo disso, o trade é tratado como flat
+
+trading:
+  symbols:
+    - "BTC/USDT:USDT"
+    - "ETH/USDT:USDT"
+  # Perfis de horizonte. Cada um pode ter pesos/parâmetros próprios.
+  profiles:
+    daytrade:
+      timeframe: "15m"
+      enabled: true
+    swing:
+      timeframe: "4h"
+      enabled: true

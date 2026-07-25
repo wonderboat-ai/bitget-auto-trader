@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dossiê de Mercado Cripto v2 — Prompt do Analista-Chefe</title>
+<style>
+  :root{
+    --bg:#0a0e14;
+    --panel:#111722;
+    --panel-2:#0d131c;
+    --border:#1e2a3a;
+    --text:#e6edf3;
+    --muted:#8b9bb0;
+    --accent:#f7931a;
+    --accent-2:#2dd4bf;
+    --red:#ff5c5c;
+    --yellow:#ffcb47;
+    --green:#36d399;
+    --new:#a78bfa;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{
+    font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,Roboto,Helvetica,Arial,sans-serif;
+    background:radial-gradient(1200px 600px at 80% -10%,rgba(247,147,26,.08),transparent 60%),var(--bg);
+    color:var(--text);line-height:1.6;padding:32px 16px 80px;
+  }
+  .wrap{max-width:900px;margin:0 auto;}
+  header.hero{
+    border:1px solid var(--border);border-radius:16px;
+    background:linear-gradient(180deg,var(--panel),var(--panel-2));
+    padding:28px 28px 24px;position:relative;overflow:hidden;
+  }
+  header.hero::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;
+    background:linear-gradient(90deg,var(--accent),var(--accent-2));}
+  .kicker{font-size:12px;letter-spacing:2px;text-transform:uppercase;color:var(--accent);font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:10px;}
+  .v2{background:var(--new);color:#160d2b;border-radius:6px;padding:2px 8px;font-size:11px;letter-spacing:1px;}
+  h1{font-size:28px;line-height:1.25;font-weight:800;margin-bottom:10px;}
+  h1 .thin{color:var(--muted);font-weight:500;}
+  .sub{color:var(--muted);font-size:15px;max-width:660px;}
+  .context{margin-top:18px;border:1px solid var(--border);border-left:3px solid var(--accent-2);
+    border-radius:10px;background:var(--panel-2);padding:16px 18px;font-size:14.5px;color:#cfd9e4;}
+  .context strong{color:var(--text);}
+  .whatsnew{margin-top:14px;border:1px solid rgba(167,139,250,.35);border-left:3px solid var(--new);
+    border-radius:10px;background:rgba(167,139,250,.06);padding:14px 18px;font-size:14px;color:#d8d2ec;}
+  .whatsnew b{color:#c7b8ff;}
+  .copybar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:24px 0 8px;}
+  button.copy{background:var(--accent);color:#1a1205;border:none;font-weight:700;font-size:14px;
+    letter-spacing:.3px;padding:12px 20px;border-radius:10px;cursor:pointer;
+    transition:transform .08s ease,filter .15s ease;display:inline-flex;align-items:center;gap:8px;}
+  button.copy:hover{filter:brightness(1.08);}
+  button.copy:active{transform:translateY(1px);}
+  button.copy.copied{background:var(--green);color:#04150d;}
+  .hint{color:var(--muted);font-size:13px;}
+  .fields{border:1px solid var(--border);border-radius:12px;background:var(--panel);padding:18px 20px;margin:18px 0 8px;}
+  .fields h3{font-size:13px;text-transform:uppercase;letter-spacing:1.5px;color:var(--accent);margin-bottom:12px;}
+  .field-row{display:flex;gap:10px;flex-wrap:wrap;font-size:14px;color:#cfd9e4;margin-bottom:8px;}
+  .field-row b{color:var(--text);min-width:170px;}
+  section.part{border:1px solid var(--border);border-radius:12px;background:var(--panel);margin-top:18px;overflow:hidden;}
+  .part-head{display:flex;align-items:center;gap:12px;padding:16px 20px;background:var(--panel-2);border-bottom:1px solid var(--border);}
+  .num{flex:none;width:34px;height:34px;border-radius:9px;background:linear-gradient(160deg,var(--accent),#c46f0d);
+    color:#1a1205;font-weight:800;font-size:15px;display:grid;place-items:center;}
+  .num.new{background:linear-gradient(160deg,var(--new),#7c5fd6);color:#160d2b;}
+  .part-title{font-size:16px;font-weight:700;letter-spacing:.3px;display:flex;align-items:center;gap:10px;}
+  .badge-new{background:var(--new);color:#160d2b;font-size:10px;letter-spacing:1px;border-radius:5px;padding:2px 7px;font-weight:800;}
+  .part-body{padding:14px 20px 20px;}
+  ol.items{list-style:none;counter-reset:item;}
+  ol.items>li{counter-increment:item;position:relative;padding:10px 0 10px 38px;
+    border-bottom:1px dashed rgba(255,255,255,.06);font-size:14.5px;color:#d4dde7;}
+  ol.items>li:last-child{border-bottom:none;}
+  ol.items>li::before{content:counter(item);position:absolute;left:0;top:10px;width:24px;height:24px;
+    border-radius:7px;background:var(--panel-2);border:1px solid var(--border);color:var(--accent-2);
+    font-size:12px;font-weight:700;display:grid;place-items:center;}
+  .tags{margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;}
+  .tag{font-size:12px;padding:2px 9px;border-radius:20px;font-weight:600;}
+  .t-red{background:rgba(255,92,92,.12);color:var(--red);}
+  .t-yellow{background:rgba(255,203,71,.12);color:var(--yellow);}
+  .t-green{background:rgba(54,211,153,.12);color:var(--green);}
+  section.part.synth .part-head{background:linear-gradient(90deg,rgba(247,147,26,.14),transparent);}
+  footer{text-align:center;color:var(--muted);font-size:12.5px;margin-top:40px;padding-top:20px;border-top:1px solid var(--border);}
+  footer b{color:var(--text);}
+  #rawprompt{position:absolute;left:-9999px;top:-9999px;white-space:pre-wrap;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">Mesa de Operações · Cripto <span class="v2">VERSÃO 2</span></div>
+    <h1>Dossiê de Mercado em 1 Minuto<br><span class="thin">o prompt do seu analista-chefe — agora com on-chain e liquidez macro</span></h1>
+    <p class="sub">Copie, cole, preencha a data — e a IA devolve um briefing institucional completo: calendário, macro/liquidez, técnico multi-timeframe, on-chain, moedas quentes, posicionamento e síntese com gestão de risco.</p>
+
+    <div class="context">
+      A ideia continua a mesma: a IA nivela o trader de casa com a mesa de um fundo. A diferença da v2 é o
+      <strong>motor da análise</strong> — além de preço e derivativos, ela agora lê a <strong>cadeia (on-chain)</strong> e a
+      <strong>liquidez macro</strong>, que são os dois fatores que de fato definem direção em cripto.
+    </div>
+
+    <div class="whatsnew">
+      <b>O que mudou na v2:</b> nova <b>Parte 3 — Macro &amp; Liquidez</b> (DXY, juros, M2 global, FedWatch, correlações);
+      nova <b>Parte 5 — On-Chain</b> (netflow de exchanges, MVRV/SOPR, stablecoins, mineradores, baleias);
+      <b>técnico</b> com semanal/mensal, médias móveis, volume profile e divergências;
+      <b>posicionamento</b> com skew de opções, gamma, long/short, Fear &amp; Greed; e
+      <b>síntese</b> com gestão de risco (R:R, stop) e delta diário ("o que mudou desde ontem").
+    </div>
+
+    <div class="copybar">
+      <button class="copy" id="copyBtn">⧉ Copiar prompt completo (v2)</button>
+      <span class="hint">Cole na sua IA e troque <b>[DATA]</b> pela data de hoje.</span>
+    </div>
+  </header>
+
+  <div class="fields">
+    <h3>Cabeçalho do prompt</h3>
+    <div class="field-row"><b>Papel</b><span>Você é o meu analista-chefe de mesa de operações cripto. Entregue um dossiê completo em uma única resposta estruturada. Pesquise dados atuais e confirmados antes de responder e cite a fonte e a data de cada dado quantitativo.</span></div>
+    <div class="field-row"><b>Data de hoje</b><span>[DATA]</span></div>
+    <div class="field-row"><b>Ativo principal</b><span>BTC (cite ETH e altcoins quando relevante)</span></div>
+    <div class="field-row"><b>Tempo gráfico</b><span>Mensal, Semanal, Diário e 4H</span></div>
+    <div class="field-row"><b>Opcional</b><span>anexar print do gráfico — se anexado, use-o na Parte 4</span></div>
+  </div>
+
+  <!-- 1 -->
+  <section class="part">
+    <div class="part-head"><div class="num">1</div><div class="part-title">Calendário Econômico da Semana</div></div>
+    <div class="part-body">
+      <ol class="items">
+        <li>Eventos mais importantes da SEMANA (segunda a domingo), em ordem cronológica, com dia e horário de Brasília: CPI, PCE, PPI, NFP, jobless claims, PIB, ISM, vendas no varejo, FOMC e falas de dirigentes do Fed, leilões de Tesouro, vencimentos de opções BTC/ETH (Deribit/CME), unlocks de tokens relevantes, decisões da SEC e Copom/IPCA.</li>
+        <li>Classifique cada evento por impacto potencial no BTC:
+          <div class="tags"><span class="tag t-red">🔴 alto</span><span class="tag t-yellow">🟡 médio</span><span class="tag t-green">🟢 baixo</span></div>
+        </li>
+        <li>Para os dados de juros/inflação, traga a <b>probabilidade de corte/alta precificada</b> (CME FedWatch / futuros de Fed funds).</li>
+        <li>Destaque qual é <b>O</b> evento da semana — aquele que pode definir a direção — e por quê.</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- 2 -->
+  <section class="part">
+    <div class="part-head"><div class="num">2</div><div class="part-title">Agenda e Notícias de Hoje</div></div>
+    <div class="part-body">
+      <ol class="items">
+        <li>Eventos de hoje com horário de Brasília e consenso de mercado para cada um (o que está precificado).</li>
+        <li>As 3 notícias mais relevantes das últimas 24h para cripto, com fonte e data.</li>
+        <li>As 3 notícias GEOPOLÍTICAS mais importantes do momento (conflitos, sanções, tensões comerciais, eleições, decisões de bancos centrais fora dos EUA, petróleo/energia), com fonte e data. Para cada uma, explique o canal de transmissão para o BTC: aversão a risco (risk-off), fuga para o dólar, narrativa de reserva de valor ou impacto em liquidez global — e se o efeito esperado é de alta, baixa ou neutro.</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- 3 NEW -->
+  <section class="part">
+    <div class="part-head"><div class="num new">3</div><div class="part-title">Macro &amp; Liquidez <span class="badge-new">NOVO</span></div></div>
+    <div class="part-body">
+      <ol class="items">
+        <li><b>Dólar e juros:</b> nível e direção do DXY; Treasuries de 10 e 2 anos; yields reais (TIPS). O que cada um sinaliza para o BTC.</li>
+        <li><b>Liquidez global:</b> tendência do M2 global e da liquidez líquida do Fed (balanço − RRP − TGA). Estamos em expansão ou contração de liquidez?</li>
+        <li><b>Correlações móveis:</b> BTC vs. S&amp;P 500 e Nasdaq (BTC está agindo como "tech alavancado"?) e BTC vs. ouro (narrativa de reserva de valor?).</li>
+        <li><b>Termômetros de risco:</b> VIX (vol de ações), MOVE (vol de bonds) e spreads de crédito high-yield — sinal de risk-on ou risk-off.</li>
+        <li><b>Fora dos EUA:</b> China (PBOC/estímulo) e Japão (BOJ / carry trade do iene) — qualquer choque de liquidez relevante.</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- 4 -->
+  <section class="part">
+    <div class="part-head"><div class="num">4</div><div class="part-title">Estrutura Técnica (Mensal → 4H)</div></div>
+    <div class="part-body">
+      <ol class="items">
+        <li><b>Contexto de timeframe maior:</b> tendência no Mensal e no Semanal (topos/fundos ascendentes ou descendentes?) antes de descer ao Diário e 4H.</li>
+        <li><b>Médias móveis:</b> posição do preço vs. MM 50/100/200 (diária) e EMAs relevantes; sinalize golden/death cross.</li>
+        <li><b>Suportes e resistências</b> principais com níveis de preço, ancorados em <b>Volume Profile (POC e Value Area)</b> — não só linhas no olhômetro.</li>
+        <li><b>Momentum:</b> RSI e MACD com destaque para divergências (altista/baixista). Níveis de Fibonacci relevantes (retração/extensão) para alvos.</li>
+        <li><b>Nível de INVALIDAÇÃO</b> para o cenário comprado e para o vendido.</li>
+        <li>O que o lado oposto da minha leitura estaria enxergando.</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- 5 NEW -->
+  <section class="part">
+    <div class="part-head"><div class="num new">5</div><div class="part-title">On-Chain <span class="badge-new">NOVO</span></div></div>
+    <div class="part-body">
+      <ol class="items">
+        <li><b>Fluxo de exchanges (netflow):</b> BTC entrando (pressão de venda) ou saindo para cold wallets (acumulação)?</li>
+        <li><b>Holders:</b> comportamento de LTH vs. STH (oferta dos detentores de longo prazo subindo ou caindo?) e métricas de valuation on-chain: MVRV / MVRV Z-score, SOPR, NUPL (mercado caro ou barato vs. custo da rede?).</li>
+        <li><b>Stablecoins:</b> tendência do market cap de USDT+USDC e mintagem recente da Tether — "pólvora seca" entrando ou saindo?</li>
+        <li><b>Mineradores:</b> hash rate, reservas de mineradores e Puell Multiple — sinal de estresse de oferta ou capitulação?</li>
+        <li><b>Baleias:</b> grandes transações / movimentações relevantes nas últimas 24–48h.</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- 6 -->
+  <section class="part">
+    <div class="part-head"><div class="num">6</div><div class="part-title">Radar de Moedas Quentes</div></div>
+    <div class="part-body">
+      <ol class="items">
+        <li>As 5 moedas/narrativas mais quentes do momento: maiores altas e volume nos últimos 7 dias, e a qual narrativa pertencem (IA, RWA, L2, memecoins, DeFi etc).</li>
+        <li>Para cada uma: o que está movendo o preço (catalisador real ou apenas fluxo especulativo?) e o principal risco (unlock próximo, concentração, baixo fundamento).</li>
+        <li>Dominância do BTC e dominância das stablecoins (USDT.D) subindo ou caindo? Estamos em momento de BTC, de altcoins ou de fuga para caixa?</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- 7 -->
+  <section class="part">
+    <div class="part-head"><div class="num">7</div><div class="part-title">Posicionamento e Probabilidades</div></div>
+    <div class="part-body">
+      <ol class="items">
+        <li><b>Derivativos:</b> max pain das opções, funding rate dos perpétuos (positivo/negativo? esticado?), open interest (subindo ou caindo?), fluxo dos ETFs spot de BTC (últimos dias) e liquidações relevantes nas últimas 24h.</li>
+        <li><b>Posicionamento direcional:</b> skew de opções (put/call, 25-delta), gamma de dealers / nível de gamma flip, long/short ratio, CVD e taker buy/sell — quem está agressivo?</li>
+        <li><b>Sentimento:</b> Fear &amp; Greed Index e prêmio Coinbase/Korea (Kimchi) — demanda institucional vs. varejo.</li>
+        <li><b>Matriz de cenários:</b> para cada evento de hoje, resultado ACIMA / EM LINHA / ABAIXO do consenso → impacto provável no BTC (alta/baixa/lateral) e intensidade (fraca/média/forte).</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- 8 -->
+  <section class="part synth">
+    <div class="part-head"><div class="num">8</div><div class="part-title">Síntese Executiva &amp; Gestão de Risco</div></div>
+    <div class="part-body">
+      <ol class="items">
+        <li><b>Viés do dia em UMA PALAVRA:</b> long, short ou neutro — com no máximo 3 linhas de justificativa.</li>
+        <li><b>Região tática:</b> onde buscar entrada a favor do viés, alvo(s) e onde a tese morre (com relação risco/retorno R:R aproximada).</li>
+        <li><b>Risco do dia:</b> o evento ou nível que pode virar o jogo e o horário em que devo estar atento.</li>
+        <li><b>Oportunidade da semana:</b> cruzando o calendário (Parte 1), o radar (Parte 6) e o on-chain (Parte 5), qual setup merece ser monitorado nos próximos dias?</li>
+        <li><b>Delta diário — o que mudou desde ontem:</b> principais variações de preço, fluxo de ETF, funding e on-chain em relação ao dia anterior.</li>
+      </ol>
+    </div>
+  </section>
+
+  <footer>
+    <b>Como usar:</b> abra sua IA com acesso à web → cole o prompt → troque [DATA] → leia o dossiê.<br>
+    Rode toda manhã antes do pregão americano. Modelo de prompt — adapte níveis, ativos e indicadores à sua operação. Conteúdo informativo, não recomendação de investimento.
+  </footer>
+
+  <div id="rawprompt">Você é o meu analista-chefe de mesa de operações cripto. Sua função é me entregar um dossiê completo do mercado em uma única resposta estruturada. Pesquise dados atuais e confirmados antes de responder e cite a fonte e a data de cada dado quantitativo.
+
+Data de hoje: [DATA]
+Ativo principal: BTC (cite ETH e altcoins quando relevante).
+Tempo gráfico de referência: Mensal, Semanal, Diário e 4H.
+[OPCIONAL: anexar print do gráfico — se anexado, use-o na Parte 4]
+
+PARTE 1 — CALENDÁRIO ECONÔMICO DA SEMANA
+1. Os eventos mais importantes da SEMANA (de segunda a domingo), em ordem cronológica, com dia e horário de Brasília: CPI, PCE, PPI, NFP, jobless claims, PIB, ISM, vendas no varejo, FOMC e falas de dirigentes do Fed, leilões de Tesouro, vencimentos de opções BTC/ETH (Deribit/CME), unlocks de tokens relevantes, decisões da SEC e Copom/IPCA.
+2. Classifique cada evento por impacto potencial no BTC: 🔴 alto / 🟡 médio / 🟢 baixo.
+3. Para os dados de juros/inflação, traga a probabilidade de corte/alta precificada (CME FedWatch / futuros de Fed funds).
+4. Destaque qual é O evento da semana — aquele que pode definir a direção — e por quê.
+
+PARTE 2 — AGENDA E NOTÍCIAS DE HOJE
+5. Eventos de hoje com horário de Brasília e consenso de mercado para cada um (o que está precificado).
+6. As 3 notícias mais relevantes das últimas 24h para cripto, com fonte e data.
+7. As 3 notícias GEOPOLÍTICAS mais importantes do momento (conflitos, sanções, tensões comerciais, eleições relevantes, decisões de bancos centrais fora dos EUA, petróleo/energia), com fonte e data. Para cada uma, explique o canal de transmissão para o BTC: aversão a risco (risk-off), fuga para o dólar, narrativa de reserva de valor ou impacto em liquidez global — e se o efeito esperado é de alta, baixa ou neutro.
+
+PARTE 3 — MACRO E LIQUIDEZ
+8. Dólar e juros: nível e direção do DXY; Treasuries de 10 e 2 anos; yields reais (TIPS). O que cada um sinaliza para o BTC.
+9. Liquidez global: tendência do M2 global e da liquidez líquida do Fed (balanço − RRP − TGA). Estamos em expansão ou contração de liquidez?
+10. Correlações móveis: BTC vs. S&P 500 e Nasdaq (BTC está agindo como "tech alavancado"?) e BTC vs. ouro (narrativa de reserva de valor?).
+11. Termômetros de risco: VIX (vol de ações), MOVE (vol de bonds) e spreads de crédito high-yield — sinal de risk-on ou risk-off.
+12. Fora dos EUA: China (PBOC/estímulo) e Japão (BOJ / carry trade do iene) — qualquer choque de liquidez relevante.
+
+PARTE 4 — ESTRUTURA TÉCNICA (MENSAL → 4H)
+13. Contexto de timeframe maior: tendência no Mensal e no Semanal (topos/fundos ascendentes ou descendentes?) antes de descer ao Diário e 4H.
+14. Médias móveis: posição do preço vs. MM 50/100/200 (diária) e EMAs relevantes; sinalize golden/death cross.
+15. Suportes e resistências principais com níveis de preço, ancorados em Volume Profile (POC e Value Area) — não só linhas no olhômetro.
+16. Momentum: RSI e MACD com destaque para divergências (altista/baixista). Níveis de Fibonacci relevantes (retração/extensão) para alvos.
+17. Nível de INVALIDAÇÃO para o cenário comprado e para o vendido.
+18. O que o lado oposto da minha leitura estaria enxergando.
+
+PARTE 5 — ON-CHAIN
+19. Fluxo de exchanges (netflow): BTC entrando (pressão de venda) ou saindo para cold wallets (acumulação)?
+20. Holders: comportamento de LTH vs. STH (oferta dos detentores de longo prazo subindo ou caindo?) e métricas de valuation on-chain: MVRV / MVRV Z-score, SOPR, NUPL (mercado caro ou barato vs. custo da rede?).
+21. Stablecoins: tendência do market cap de USDT+USDC e mintagem recente da Tether — "pólvora seca" entrando ou saindo?
+22. Mineradores: hash rate, reservas de mineradores e Puell Multiple — sinal de estresse de oferta ou capitulação?
+23. Baleias: grandes transações / movimentações relevantes nas últimas 24–48h.
+
+PARTE 6 — RADAR DE MOEDAS QUENTES
+24. As 5 moedas/narrativas mais quentes do momento: maiores altas e volume nos últimos 7 dias, e a qual narrativa pertencem (IA, RWA, L2, memecoins, DeFi etc).
+25. Para cada uma: o que está movendo o preço (catalisador real ou apenas fluxo especulativo?) e o principal risco (unlock próximo, concentração, baixo fundamento).
+26. Dominância do BTC e dominância das stablecoins (USDT.D) subindo ou caindo? Estamos em momento de BTC, de altcoins ou de fuga para caixa?
+
+PARTE 7 — POSICIONAMENTO E PROBABILIDADES
+27. Derivativos: max pain das opções, funding rate dos perpétuos (positivo/negativo? esticado?), open interest (subindo ou caindo?), fluxo dos ETFs spot de BTC (últimos dias) e liquidações relevantes nas últimas 24h.
+28. Posicionamento direcional: skew de opções (put/call, 25-delta), gamma de dealers / nível de gamma flip, long/short ratio, CVD e taker buy/sell — quem está agressivo?
+29. Sentimento: Fear & Greed Index e prêmio Coinbase/Korea (Kimchi) — demanda institucional vs. varejo.
+30. Matriz de cenários: para cada evento de hoje, resultado ACIMA / EM LINHA / ABAIXO do consenso → impacto provável no BTC (alta/baixa/lateral) e intensidade (fraca/média/forte).
+
+PARTE 8 — SÍNTESE EXECUTIVA E GESTÃO DE RISCO
+31. Viés do dia em UMA PALAVRA: long, short ou neutro — com no máximo 3 linhas de justificativa.
+32. Região tática: onde buscar entrada a favor do viés, alvo(s) e onde a tese morre (com relação risco/retorno R:R aproximada).
+33. Risco do dia: o evento ou nível que pode virar o jogo e o horário em que devo estar atento.
+34. Oportunidade da semana: cruzando o calendário (Parte 1), o radar (Parte 6) e o on-chain (Parte 5), qual setup merece ser monitorado nos próximos dias?
+35. Delta diário — o que mudou desde ontem: principais variações de preço, fluxo de ETF, funding e on-chain em relação ao dia anterior.
+
+Importante: inclua uma seção "Fontes" ao final com os links das pesquisas usadas. Este dossiê é informativo, não recomendação de investimento.</div>
+
+</div>
+
+<script>
+  const btn = document.getElementById('copyBtn');
+  const raw = document.getElementById('rawprompt').innerText;
+  btn.addEventListener('click', async () => {
+    try{ await navigator.clipboard.writeText(raw); }
+    catch(e){
+      const ta=document.createElement('textarea');ta.value=raw;document.body.appendChild(ta);
+      ta.select();document.execCommand('copy');document.body.removeChild(ta);
+    }
+    const old = btn.textContent;
+    btn.textContent = '✓ Prompt v2 copiado!';
+    btn.classList.add('copied');
+    setTimeout(()=>{btn.textContent=old;btn.classList.remove('copied');},1900);
+  });
+</script>
+</body>
+</html>

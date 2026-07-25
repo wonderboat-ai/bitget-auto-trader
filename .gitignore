@@ -1,0 +1,45 @@
+# Segredos - NUNCA versionar
+.env
+*.key
+*.secret
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Logs e estado local
+logs/*.log
+logs/*.jsonl
+state/*.json
+
+# Dados de mercado e cache do dossiê (regeneráveis via research/download_data*.py
+# e dossier_fetch.py — não são código, não precisam ir pro repositório)
+/data/
+
+# Pesquisa: datasets e resultados grandes (regeneráveis); mantém os scripts .py e os
+# relatórios .md, que são o que importa versionar
+/research/data/
+/research/data_2b/
+/research/data_perp/
+/research/results/
+/research/results_2b/
+/research/scratch/
+research/*.jsonl
+
+# Dossiê diário gerado (arquivo histórico, não é código)
+/Dossie Cripto/
+
+# Configuração local desta máquina (caminhos absolutos, específicos deste PC)
+.claude/
+.mcp.json
+
+# Repositório git ANINHADO não relacionado (dashboard separado, tem seu próprio .git)
+/repo/
+
+# OS
+.DS_Store
+Thumbs.db
