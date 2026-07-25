@@ -1,4 +1,4 @@
-# CLAUDE.md — Bybit Auto Trader (handoff 2026-07-23, ~00:31 UTC / 21:31 BRT)
+# CLAUDE.md — Bybit Auto Trader (handoff 2026-07-25, ~19:xx UTC)
 
 Contexto vivo do projeto para agentes (Claude Code/Cowork). Fonte completa de
 regras: `INSTRUCOES-PROJETO-v2.md` v2 + `RASCUNHO-instrucoes-v7-colar-manualmente.md`
@@ -7,6 +7,53 @@ colada nas instruções do Claude Project — ver item 5 dos "Próximos passos")
 Guia operacional humano: `PASSO-A-PASSO.md` (bootstrapping — todas as etapas
 fechadas, ver seu próprio aviso de topo). Idioma de trabalho: português do
 Brasil. Comentários de código explicam causa raiz.
+
+**Novo (25/07): repositório GitHub PRIVADO dedicado criado — `wonderboat-ai/bybit-auto-trader`
+— para viabilizar um 2º PC rodando o motor 24h.** A pedido do Lucas ("configurar
+outro PC pra rodar 24h enquanto uso este pra fazer upgrades"), inicializado git
+nesta pasta (`git init`, identidade configurada só LOCALMENTE neste repositório,
+não na global) e feito o push inicial (commit `b1095d1`, 69 arquivos). Fora do
+repositório de propósito: `.env` (segredos), `state/*.json` (kill switch/
+cooldown/proteções — estado local, cada máquina cria o seu do zero), `logs/*.jsonl`
+(trilha de auditoria), `data/`/`research/data*`/`research/results*`/`scratch`
+(dados de mercado/pesquisa regeneráveis via script, não são código),
+`Dossie Cripto/` (arquivo gerado), `.claude/`/`.mcp.json` (config específica
+desta máquina — caminho absoluto do venv daqui), e a pasta `repo/` (um
+repositório git ANINHADO não relacionado — é o `dashboard-cripto` clonado à
+parte; teria virado gitlink/submódulo quebrado se não tivesse sido excluído
+explicitamente no `.gitignore`). Antes do push, auditoria manual (grep por
+padrões de chave/segredo — `_KEY=`/`_SECRET=` com valor, prefixos `sk-ant-`/
+`ghp_`/`AKIA`, blocos `BEGIN PRIVATE KEY`) em todos os 69 arquivos rastreados
+não achou nenhum segredo real — só um placeholder óbvio (`README.md`, texto
+literal "seu_secret").
+
+**Decisão do Lucas sobre a arquitetura dos dois PCs, com uma regra nova e
+importante para qualquer sessão futura**: o PC novo ("PC2") vai rodar
+`supervisor.py --live` 24h/dia, autenticado com uma chave de API de testnet
+NOVA e SEPARADA da que este PC (PC1) usa — mas as duas chaves autenticam a
+MESMA conta/saldo da testnet Bybit (chave nova ≠ conta nova; não existe
+conceito de sub-conta em uso aqui). **Por causa disso, PC1 NUNCA deve rodar
+`main.py --live`/`supervisor.py --live` em loop contínuo ao mesmo tempo que o
+PC2 estiver rodando** — os dois processos gerenciariam a MESMA posição/saldo
+na exchange com estado local (kill switch, cooldown, proteções) inteiramente
+independente um do outro, quebrando a garantia de "nunca duas instâncias" que
+o projeto já tinha (antes cobria só duas instâncias na MESMA máquina/pasta
+OneDrive — agora se estende a duas MÁQUINAS diferentes na mesma conta). PC1
+segue livre para `--once` (dry-run, sem `--live`) e pesquisa/backtest — nunca
+um loop `--live` contínuo enquanto o PC2 estiver de pé. Pasta do PC2
+deliberadamente FORA do OneDrive (decisão do Lucas) — clone local dedicado,
+sem sincronização. Guia completo de setup do PC2 entregue ao Lucas no chat
+desta sessão (Python/Git/GitHub CLI, clonar o repo, criar `.env` com a chave
+nova gerada por ELE na Bybit, validar com `diag_saldo.py`/`--once` antes do
+`--live`, deixar o PC sem suspensão, e como puxar atualizações futuras).
+
+**Fluxo de atualização de código daqui pra frente**: dev/testes continuam
+neste PC (PC1, pasta OneDrive) como sempre; quando uma mudança for testada e
+aprovada, `git push` pro repositório (`origin/main`) a partir daqui. No PC2,
+atualizar exige parar o motor de forma limpa (Ctrl+C, deixa o `engine_stop`
+ser auditado) → `git pull` → religar (`python supervisor.py --live`) — nunca
+`git pull` com o motor rodando (mesma razão de sempre: `engine.py`/
+`risk_manager.py` só recarregam num processo novo).
 
 **Fase 3 (LLMStrategy) endurecida, ainda DESLIGADA (22-23/07 ~00:31 UTC)**:
 a pedido do Lucas ("explorar Fase 3" → "fazer tudo"), a camada de decisão
