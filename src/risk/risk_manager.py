@@ -94,18 +94,22 @@ class RiskManager:
         self._kill_reason = ""
         kill_switch_state.save(False, "")
 
-    # ---------------------- Cooldown por símbolo (21/07) ----------------------
+    # ---------------------- Cooldown por símbolo (21/07, 3 níveis desde 25/07) ----------------------
     def record_trade_close(self, symbol: str, reason: str) -> None:
         """Chamado pelo engine sempre que uma posição fecha (qualquer motivo).
 
         `reason == "stop_loss"` incrementa a sequência de stops seguidos DO
         SÍMBOLO; ao atingir o gatilho (`consecutive_stops_trigger`), ativa um
-        cooldown (bloqueia entradas novas nesse símbolo) por
-        `cooldown_minutes_first` — ou `cooldown_minutes_escalated` se já for
-        o 2º+ acionamento do dia (UTC) pra esse símbolo. Qualquer outro motivo
-        de fechamento (take_profit/signal_exit/trailing_stop/
-        external_close_unconfirmed) QUEBRA a sequência — só stops SEGUIDOS
-        contam, um TP no meio reseta a contagem pra zero.
+        cooldown (bloqueia entradas novas nesse símbolo) com duração por
+        NÍVEL — 1º acionamento do dia usa `cooldown_minutes_first`, 2º usa
+        `cooldown_minutes_escalated`, 3º em diante usa `cooldown_minutes_max`
+        (decisão do Lucas, 25/07/2026: `consecutive_stops_trigger` virou 1 —
+        cada stop isolado já conta, não precisa mais de 2 seguidos). Qualquer
+        outro motivo de fechamento (take_profit/signal_exit/trailing_stop/
+        external_close_unconfirmed) QUEBRA a sequência de `consecutive_stops`
+        — com o gatilho em 1 isso não muda o resultado prático (cada stop já
+        aciona sozinho), mas mantém o campo coerente caso o gatilho volte a
+        subir no futuro.
 
         Sem a chave `cooldown` no YAML, esta função não faz nada (feature
         fica desligada por omissão — mesmo padrão de exit_on_signal/trailing).
@@ -129,8 +133,16 @@ class RiskManager:
                 entry["triggers_date"] = today
                 entry["triggers_today"] = 0
             entry["triggers_today"] += 1
-            minutes = (cd_cfg.get("cooldown_minutes_first", 30) if entry["triggers_today"] <= 1
-                       else cd_cfg.get("cooldown_minutes_escalated", 60))
+            # 3 níveis por dia (UTC), por símbolo: 1º -> first, 2º ->
+            # escalated, 3º em diante -> max (25/07/2026). Sem a chave nova
+            # `cooldown_minutes_max` no YAML, cai no valor de `escalated` —
+            # comportamento antigo (2 níveis) preservado por omissão.
+            if entry["triggers_today"] <= 1:
+                minutes = cd_cfg.get("cooldown_minutes_first", 30)
+            elif entry["triggers_today"] == 2:
+                minutes = cd_cfg.get("cooldown_minutes_escalated", 60)
+            else:
+                minutes = cd_cfg.get("cooldown_minutes_max", cd_cfg.get("cooldown_minutes_escalated", 60))
             until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
             entry["cooldown_until"] = until.isoformat()
             entry["consecutive_stops"] = 0  # reinicia a contagem após acionar
@@ -142,6 +154,27 @@ class RiskManager:
                   trigger_number_today=entry["triggers_today"])
         self._cooldown[symbol] = entry
         cooldown_state.save(self._cooldown)
+
+    def reset_cooldown(self, symbol: str) -> None:
+        """Libera manualmente o cooldown ativo de um símbolo, antes do prazo
+        natural (ex.: a pausa de 24h do 3º stop do dia). Reset é sempre
+        deliberado — nunca automático, mesma filosofia do kill switch
+        (`reset_kill_switch`). Chamado pelo engine em resposta a um pedido
+        via MCP (`trader_reset_cooldown`, control.json action=reset_cooldown).
+
+        Símbolo sem cooldown ativo: só loga um aviso, não é erro — evita que
+        um pedido "atrasado" (cooldown já tinha expirado sozinho) derrube
+        nada."""
+        entry = self._cooldown.get(symbol)
+        if not entry or not entry.get("cooldown_until"):
+            log.warning("Reset de cooldown pedido para %s, mas não há cooldown ativo", symbol)
+            return
+        previous_until = entry["cooldown_until"]
+        entry["cooldown_until"] = None
+        self._cooldown[symbol] = entry
+        cooldown_state.save(self._cooldown)
+        log.warning("Cooldown de %s resetado manualmente (estava até %s)", symbol, previous_until)
+        audit("cooldown_reset", symbol=symbol, previous_cooldown_until=previous_until)
 
     def _cooldown_veto_reason(self, symbol: str) -> str | None:
         """None se o símbolo está livre pra operar; motivo do veto se não."""

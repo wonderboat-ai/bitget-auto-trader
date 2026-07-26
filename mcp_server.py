@@ -171,7 +171,40 @@ def trader_request_reset(confirm: bool = False) -> str:
     return _json({"ok": True, "action": "reset_requested"})
 
 
-def _write_control_signal(action: str, reason: str) -> None:
+@mcp.tool(
+    name="trader_cooldown_status",
+    annotations={"title": "Status de cooldown por símbolo", "readOnlyHint": True,
+                 "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+def trader_cooldown_status() -> str:
+    """Mostra, por símbolo, se há cooldown ativo agora (pausa de entrada após
+    stop, escalando 30min/60min/24h no 1º/2º/3º+ do dia), até quando, e
+    quantas vezes já acionou hoje. Use para 'algum símbolo está em cooldown?'
+    ou 'quando o ETH volta a poder operar?'."""
+    return _json(_reader().read_cooldown_status())
+
+
+@mcp.tool(
+    name="trader_reset_cooldown",
+    annotations={"title": "Liberar cooldown manualmente", "readOnlyHint": False,
+                 "destructiveHint": False, "idempotentHint": False, "openWorldHint": False},
+)
+def trader_reset_cooldown(symbol: str, confirm: bool = False) -> str:
+    """Solicita a liberação manual do cooldown ativo de um símbolo, antes do
+    prazo natural (ex.: a pausa de 24h do 3º stop do dia). Exige confirm=True.
+    Ação deliberada do operador — mesma filosofia do reset do kill switch.
+
+    Args:
+        symbol: par no formato CCXT, ex. 'BTC/USDT:USDT'.
+        confirm: precisa ser True para efetivar.
+    """
+    if not confirm:
+        return _json({"ok": False, "error": "reset requer confirm=True (ação deliberada)"})
+    _write_control_signal("reset_cooldown", f"reset manual de cooldown via MCP: {symbol}", symbol=symbol)
+    return _json({"ok": True, "action": "cooldown_reset_requested", "symbol": symbol})
+
+
+def _write_control_signal(action: str, reason: str, symbol: str | None = None) -> None:
     """Escreve um sinal de controle que o engine lê no próximo ciclo.
 
     Desacopla o MCP do engine: o MCP não controla o processo do engine diretamente,
@@ -180,9 +213,12 @@ def _write_control_signal(action: str, reason: str) -> None:
     from datetime import datetime, timezone
     ctrl_dir = Path(__file__).resolve().parent / "state"
     ctrl_dir.mkdir(exist_ok=True)
+    payload = {"action": action, "reason": reason,
+               "ts": datetime.now(timezone.utc).isoformat()}
+    if symbol is not None:
+        payload["symbol"] = symbol
     with open(ctrl_dir / "control.json", "w", encoding="utf-8") as fh:
-        json.dump({"action": action, "reason": reason,
-                   "ts": datetime.now(timezone.utc).isoformat()}, fh)
+        json.dump(payload, fh)
 
 
 if __name__ == "__main__":

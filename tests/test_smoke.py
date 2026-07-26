@@ -1930,14 +1930,19 @@ status22e2 = reader22e.read_halt_status()
 ok("state_reader.read_halt_status(): reporta halted=False direto do arquivo persistido",
    status22e2["halted"] is False)
 
-# ---------- 23. cooldown por símbolo após stops seguidos (21/07) ----------
+# ---------- 23. cooldown por símbolo após stops (21/07, 3 níveis 25/07) ----------
 # Achado pelo watchdog agendado: whipsaw real no ETH/USDT (5 stops em 8
 # minutos) porque nada impedia reentrada imediata no mesmo sinal (candle de
 # 15m ainda não tinha virado). Investigado (comparação testnet vs mainnet):
 # o ETH real não se moveu, foi anomalia de dado da testnet — mas a lacuna de
-# arquitetura (sem cooldown) é real independente da causa. Decisão do Lucas:
-# 2 stops seguidos no mesmo símbolo aciona cooldown (30min no 1º
-# acionamento do dia, 60min do 2º em diante).
+# arquitetura (sem cooldown) é real independente da causa.
+#
+# ENDURECIDO em 25/07/2026 (Lucas viu o motor tomar 1 stop e reentrar quase
+# na hora, questionou se não devia "acalmar" primeiro): `consecutive_stops_trigger`
+# virou 1 (cada stop isolado já pausa, não precisa mais de 2 seguidos) e a
+# escalada ganhou um 3º nível: 1º stop do dia -> 30min, 2º -> 60min, 3º em
+# diante -> 24h (auto-libera sozinho no prazo, ou reset manual antes via
+# `RiskManager.reset_cooldown`/MCP `trader_reset_cooldown`).
 from src.risk import cooldown_state  # noqa: E402
 
 # 23a. sem histórico -> aprova normalmente
@@ -1946,67 +1951,71 @@ rm23a = RiskManager(cfg, environment="testnet")
 d23a = rm23a.evaluate(sig, state, funding_rate=None, data_age_sec=0)
 ok("cooldown: sem histórico, sinal aprovado normalmente", d23a.approved, d23a.reason)
 
-# 23b. 1 stop seguido (abaixo do gatilho de 2) -> ainda aprova
-rm23a.record_trade_close(sig.symbol, "stop_loss")
-d23b = rm23a.evaluate(sig, state, funding_rate=None, data_age_sec=0)
-ok("cooldown: 1 stop seguido (abaixo do gatilho) ainda aprova", d23b.approved, d23b.reason)
-
-# 23c. 2º stop seguido -> ACIONA o cooldown; próxima avaliação é vetada
+# 23b. 1 ÚNICO stop já ACIONA o cooldown (gatilho é 1 agora, não 2) -> 30min
 AUDIT.unlink(missing_ok=True)
 rm23a.record_trade_close(sig.symbol, "stop_loss")
-d23c = rm23a.evaluate(sig, state, funding_rate=None, data_age_sec=0)
-ok("cooldown: 2º stop seguido aciona o cooldown, próxima entrada vetada",
-   not d23c.approved and "Cooldown" in d23c.reason, d23c.reason)
+d23b = rm23a.evaluate(sig, state, funding_rate=None, data_age_sec=0)
+ok("cooldown: 1 único stop já aciona o cooldown, próxima entrada vetada",
+   not d23b.approved and "Cooldown" in d23b.reason, d23b.reason)
 ev = [json.loads(l) for l in AUDIT.read_text(encoding="utf-8").splitlines()] if AUDIT.exists() else []
-ok("cooldown_triggered auditado com os campos certos",
+ok("cooldown_triggered auditado com os campos certos (30min, acionamento nº1)",
    any(e["event"] == "cooldown_triggered" and e["symbol"] == sig.symbol
        and e["cooldown_minutes"] == 30 and e["trigger_number_today"] == 1 for e in ev))
 
-# 23d. cooldown ativo bloqueia SÓ o símbolo em cooldown, outro símbolo livre
+# 23c. cooldown ativo bloqueia SÓ o símbolo em cooldown, outro símbolo livre
 sig_outro_cd = Signal(symbol="ETH/USDT:USDT", direction=Direction.LONG, conviction=0.8,
                       entry_price=100.0, stop_price=95.0, take_profit=110.0,
                       profile="daytrade", rationale="teste outro simbolo")
-d23d = rm23a.evaluate(sig_outro_cd, state, funding_rate=None, data_age_sec=0)
-ok("cooldown: outro símbolo NÃO é afetado", d23d.approved, d23d.reason)
+d23c = rm23a.evaluate(sig_outro_cd, state, funding_rate=None, data_age_sec=0)
+ok("cooldown: outro símbolo NÃO é afetado", d23c.approved, d23c.reason)
 
-# 23e. persiste através de um "restart" simulado (RiskManager novo)
-rm23e = RiskManager(cfg, environment="testnet")
-d23e = rm23e.evaluate(sig, state, funding_rate=None, data_age_sec=0)
+# 23d. persiste através de um "restart" simulado (RiskManager novo)
+rm23d = RiskManager(cfg, environment="testnet")
+d23d = rm23d.evaluate(sig, state, funding_rate=None, data_age_sec=0)
 ok("cooldown: sobrevive a um 'restart' simulado (RiskManager novo)",
-   not d23e.approved and "Cooldown" in d23e.reason, d23e.reason)
+   not d23d.approved and "Cooldown" in d23d.reason, d23d.reason)
 
-# 23f. TP no meio quebra a sequência -> 1 stop + 1 TP + 1 stop != gatilho
-cooldown_state.STATE_PATH.unlink(missing_ok=True)
-rm23f = RiskManager(cfg, environment="testnet")
-rm23f.record_trade_close(sig.symbol, "stop_loss")
-rm23f.record_trade_close(sig.symbol, "take_profit")
-rm23f.record_trade_close(sig.symbol, "stop_loss")
-d23f = rm23f.evaluate(sig, state, funding_rate=None, data_age_sec=0)
-ok("cooldown: TP no meio quebra a sequência (1 stop + TP + 1 stop != gatilho)",
-   d23f.approved, d23f.reason)
-
-# 23g. escalonamento: 2º acionamento no MESMO dia usa a duração maior (60min)
+# 23e. escalonamento: 2º stop do dia (mesmo símbolo) -> 60min
 cooldown_state.STATE_PATH.unlink(missing_ok=True)
 AUDIT.unlink(missing_ok=True)
-rm23g = RiskManager(cfg, environment="testnet")
-rm23g.record_trade_close(sig.symbol, "stop_loss")
-rm23g.record_trade_close(sig.symbol, "stop_loss")  # 1º acionamento -> 30min
-persisted_g1 = dict(cooldown_state.load()[sig.symbol])
-# 2º acionamento no MESMO dia: record_trade_close só olha a sequência de
-# stops (nunca consulta se um cooldown já está ativo) — 2 stops seguidos de
-# novo re-aciona, e a escalada usa triggers_date/triggers_today já
-# persistidos do 1º acionamento (não precisa o cooldown anterior "expirar").
-rm23g.record_trade_close(sig.symbol, "stop_loss")
-rm23g.record_trade_close(sig.symbol, "stop_loss")  # 2º acionamento do dia -> 60min
-persisted_g2 = dict(cooldown_state.load()[sig.symbol])
-ok("cooldown: 2º acionamento no mesmo dia escala pra 60min (1º foi 30min)",
-   persisted_g1["triggers_today"] == 1 and persisted_g2["triggers_today"] == 2,
-   f"g1={persisted_g1} g2={persisted_g2}")
+rm23e = RiskManager(cfg, environment="testnet")
+rm23e.record_trade_close(sig.symbol, "stop_loss")  # 1º stop do dia -> 30min
+persisted_e1 = dict(cooldown_state.load()[sig.symbol])
+rm23e.record_trade_close(sig.symbol, "stop_loss")  # 2º stop do dia -> 60min
+persisted_e2 = dict(cooldown_state.load()[sig.symbol])
+ok("cooldown: 2º stop do dia escala pra 60min (1º foi 30min)",
+   persisted_e1["triggers_today"] == 1 and persisted_e2["triggers_today"] == 2,
+   f"e1={persisted_e1} e2={persisted_e2}")
 ev = [json.loads(l) for l in AUDIT.read_text(encoding="utf-8").splitlines()] if AUDIT.exists() else []
-triggers_cd = [e for e in ev if e["event"] == "cooldown_triggered" and e["symbol"] == sig.symbol]
-ok("cooldown_triggered audita 30min no 1º e 60min no 2º acionamento",
-   len(triggers_cd) == 2 and triggers_cd[0]["cooldown_minutes"] == 30
-   and triggers_cd[1]["cooldown_minutes"] == 60, str(triggers_cd))
+triggers_cd_e = [e for e in ev if e["event"] == "cooldown_triggered" and e["symbol"] == sig.symbol]
+ok("cooldown_triggered audita 30min no 1º e 60min no 2º stop do dia",
+   len(triggers_cd_e) == 2 and triggers_cd_e[0]["cooldown_minutes"] == 30
+   and triggers_cd_e[1]["cooldown_minutes"] == 60, str(triggers_cd_e))
+
+# 23f. 3º stop do dia (mesmo símbolo) -> 24h (1440min)
+rm23e.record_trade_close(sig.symbol, "stop_loss")  # 3º stop do dia -> 1440min
+persisted_f3 = dict(cooldown_state.load()[sig.symbol])
+ok("cooldown: 3º stop do dia escala pra 1440min (24h)",
+   persisted_f3["triggers_today"] == 3, str(persisted_f3))
+ev = [json.loads(l) for l in AUDIT.read_text(encoding="utf-8").splitlines()] if AUDIT.exists() else []
+triggers_cd_f = [e for e in ev if e["event"] == "cooldown_triggered" and e["symbol"] == sig.symbol]
+ok("cooldown_triggered audita 1440min no 3º acionamento do dia",
+   len(triggers_cd_f) == 3 and triggers_cd_f[2]["cooldown_minutes"] == 1440,
+   str(triggers_cd_f))
+
+# 23g. fechamento != stop_loss (ex. take_profit) zera consecutive_stops —
+# checado direto no estado interno (com o gatilho em 1, um stop isolado já
+# aciona e a própria linha de "acionou" também zera consecutive_stops;
+# testar isolado aqui garante que o reset por TP continua correto mesmo se
+# o gatilho um dia voltar a subir de 1 pra N).
+cooldown_state.STATE_PATH.unlink(missing_ok=True)
+rm23g = RiskManager(cfg, environment="testnet")
+rm23g._cooldown[sig.symbol] = {"consecutive_stops": 3, "cooldown_until": None,
+                                "triggers_date": None, "triggers_today": 0}
+rm23g.record_trade_close(sig.symbol, "take_profit")
+ok("cooldown: fechamento por take_profit zera consecutive_stops",
+   rm23g._cooldown[sig.symbol]["consecutive_stops"] == 0,
+   str(rm23g._cooldown[sig.symbol]))
 
 # 23h. cooldown expira naturalmente -> volta a aprovar
 # IMPORTANTE: o RiskManager só lê state/cooldown_state.json na inicialização
@@ -2017,7 +2026,6 @@ ok("cooldown_triggered audita 30min no 1º e 60min no 2º acionamento",
 # diretamente, não só no arquivo.
 cooldown_state.STATE_PATH.unlink(missing_ok=True)
 rm23h = RiskManager(cfg, environment="testnet")
-rm23h.record_trade_close(sig.symbol, "stop_loss")
 rm23h.record_trade_close(sig.symbol, "stop_loss")
 rm23h._cooldown[sig.symbol]["cooldown_until"] = "2020-01-01T00:00:00+00:00"
 d23h = rm23h.evaluate(sig, state, funding_rate=None, data_age_sec=0)
@@ -2037,11 +2045,39 @@ cfg_sem_cooldown = copy.deepcopy(cfg)
 del cfg_sem_cooldown["cooldown"]
 rm23j = RiskManager(cfg_sem_cooldown, environment="testnet")
 rm23j.record_trade_close(sig.symbol, "stop_loss")
-rm23j.record_trade_close(sig.symbol, "stop_loss")
-rm23j.record_trade_close(sig.symbol, "stop_loss")
 d23j = rm23j.evaluate(sig, state, funding_rate=None, data_age_sec=0)
 ok("cooldown: sem a chave no YAML, feature fica desligada (nunca veta)",
    d23j.approved, d23j.reason)
+
+# 23k. reset manual (reset_cooldown) libera um cooldown ativo ANTES do prazo
+# natural — pedido deliberado via MCP (control.json action=reset_cooldown),
+# mesma filosofia do reset do kill switch: nunca automático.
+cooldown_state.STATE_PATH.unlink(missing_ok=True)
+AUDIT.unlink(missing_ok=True)
+rm23k = RiskManager(cfg, environment="testnet")
+rm23k.record_trade_close(sig.symbol, "stop_loss")  # aciona cooldown de 30min
+d23k_before = rm23k.evaluate(sig, state, funding_rate=None, data_age_sec=0)
+ok("cooldown 23k: cooldown ativo antes do reset manual",
+   not d23k_before.approved and "Cooldown" in d23k_before.reason, d23k_before.reason)
+rm23k.reset_cooldown(sig.symbol)
+d23k_after = rm23k.evaluate(sig, state, funding_rate=None, data_age_sec=0)
+ok("cooldown: reset manual libera antes do prazo natural",
+   d23k_after.approved, d23k_after.reason)
+ev = [json.loads(l) for l in AUDIT.read_text(encoding="utf-8").splitlines()] if AUDIT.exists() else []
+ok("cooldown_reset auditado com o símbolo certo",
+   any(e["event"] == "cooldown_reset" and e["symbol"] == sig.symbol for e in ev))
+
+# 23l. reset manual num símbolo SEM cooldown ativo é no-op seguro (não
+# quebra nada, não audita evento fantasma).
+cooldown_state.STATE_PATH.unlink(missing_ok=True)
+AUDIT.unlink(missing_ok=True)
+rm23l = RiskManager(cfg, environment="testnet")
+rm23l.reset_cooldown(sig.symbol)  # nunca houve cooldown -> só loga aviso
+d23l = rm23l.evaluate(sig, state, funding_rate=None, data_age_sec=0)
+ok("cooldown: reset sem cooldown ativo não quebra nada", d23l.approved, d23l.reason)
+ev = [json.loads(l) for l in AUDIT.read_text(encoding="utf-8").splitlines()] if AUDIT.exists() else []
+ok("cooldown: reset sem cooldown ativo NÃO audita cooldown_reset (evento fantasma)",
+   not any(e["event"] == "cooldown_reset" for e in ev))
 
 cooldown_state.STATE_PATH.unlink(missing_ok=True)
 

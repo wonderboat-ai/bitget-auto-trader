@@ -190,3 +190,32 @@ class StateReader:
             "last_reason": last_trip.get("reason") if last_trip else None,
             "last_trip_ts": last_trip.get("ts") if last_trip else None,
         }
+
+    def read_cooldown_status(self) -> dict:
+        """Estado de cooldown por símbolo (25/07/2026), direto de
+        state/cooldown_state.json — mesmo padrão de read_halt_status: lê o
+        arquivo persistido pelo próprio RiskManager, reflete o estado REAL do
+        processo através de restarts. Só leitura: nunca limpa cooldown
+        expirado no arquivo (isso é trabalho do RiskManager no próximo
+        ciclo) — aqui só calcula "ainda ativo?" na hora da leitura."""
+        from datetime import datetime, timezone
+        from src.risk import cooldown_state
+
+        data = cooldown_state.load()
+        now = datetime.now(timezone.utc)
+        out: dict[str, dict] = {}
+        for symbol, entry in data.items():
+            until_str = entry.get("cooldown_until")
+            active = False
+            if until_str:
+                try:
+                    active = now < datetime.fromisoformat(until_str)
+                except ValueError:
+                    active = False
+            out[symbol] = {
+                "active": active,
+                "cooldown_until": until_str if active else None,
+                "triggers_today": entry.get("triggers_today", 0),
+                "triggers_date": entry.get("triggers_date"),
+            }
+        return out

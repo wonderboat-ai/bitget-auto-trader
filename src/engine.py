@@ -970,6 +970,15 @@ class Engine:
             self.risk.trip_kill_switch(f"MCP: {data.get('reason', 'halt manual')}")
         elif action == "reset" and self.risk.halted:
             self.risk.reset_kill_switch()
+        elif action == "reset_cooldown":
+            # Reset manual de cooldown por símbolo (25/07/2026) — mesmo canal
+            # desacoplado MCP->control.json->engine do halt/reset do kill
+            # switch. Symbol ausente/vazio: ignora (sem símbolo não há o que
+            # liberar); reset_cooldown() já trata símbolo sem cooldown ativo
+            # como no-op (só loga aviso).
+            symbol = data.get("symbol")
+            if symbol:
+                self.risk.reset_cooldown(symbol)
         # consome o sinal para não reaplicar todo ciclo
         try:
             ctrl.unlink()

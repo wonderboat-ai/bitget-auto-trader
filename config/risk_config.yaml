@@ -49,19 +49,35 @@ drawdown:
   max_total_drawdown_pct: 15.0
 
 cooldown:
-  # Pausa entradas NOVAS no mesmo símbolo depois de stops seguidos — decisão
-  # do Lucas em 21/07/2026, depois que o watchdog agendado achou um whipsaw
-  # real no ETH/USDT: 5 stops em 8 minutos, porque nada impedia reentrada
-  # imediata no mesmo sinal (candle de 15m ainda não tinha virado — a mesma
-  # aprovação repetia). Investigado (research/ + workflow de análise):
-  # confirmado que o ETH real não se moveu no mercado (mainnet ficou
-  # lateral); foi anomalia de dado da testnet, mas o problema de ARQUITETURA
-  # é real independente da causa — nada impedia reentrada repetida. Trata o
-  # SINTOMA (chop/reentrada), não a causa específica — funciona tanto pra
-  # dado ruim de exchange quanto pra whipsaw real de mercado.
-  consecutive_stops_trigger: 2   # nº de stops seguidos no mesmo símbolo que aciona o cooldown
-  cooldown_minutes_first: 30     # duração do 1º acionamento do dia (UTC) por símbolo
-  cooldown_minutes_escalated: 60 # duração do 2º acionamento em diante, mesmo dia
+  # Pausa entradas NOVAS no mesmo símbolo depois de stops — decisão do Lucas
+  # em 21/07/2026, depois que o watchdog agendado achou um whipsaw real no
+  # ETH/USDT: 5 stops em 8 minutos, porque nada impedia reentrada imediata no
+  # mesmo sinal (candle de 15m ainda não tinha virado — a mesma aprovação
+  # repetia). Investigado (research/ + workflow de análise): confirmado que
+  # o ETH real não se moveu no mercado (mainnet ficou lateral); foi anomalia
+  # de dado da testnet, mas o problema de ARQUITETURA é real independente da
+  # causa — nada impedia reentrada repetida. Trata o SINTOMA (chop/
+  # reentrada), não a causa específica.
+  #
+  # ENDURECIDO em 25/07/2026, a pedido do Lucas: ele viu o motor tomar 1 stop
+  # e reentrar comprado quase na hora, e questionou se não valeria a pena
+  # "acalmar" antes de tentar de novo — pergunta com peso real, já que a
+  # pesquisa de estratégia (16/07, 21/07) mostrou 2x que esta família
+  # (EMA/RSI, stop/TP fixos) é a PIOR testada. Antes, precisava de 2 stops
+  # SEGUIDOS no mesmo símbolo pra acionar qualquer pausa; agora CADA stop já
+  # pausa, com 3 níveis de severidade por dia (UTC), por símbolo:
+  #   1º stop do dia  -> 30min  (cooldown_minutes_first)
+  #   2º stop do dia  -> 60min  (cooldown_minutes_escalated)
+  #   3º stop em diante -> 24h (cooldown_minutes_max) — auto-libera sozinho
+  #     no prazo, ou reset manual antes via MCP `trader_reset_cooldown`
+  #     (ação deliberada do operador, mesma filosofia do kill switch).
+  # Take-profit no meio continua quebrando a sequência de `consecutive_stops`
+  # (não conta como stop) — só que com o gatilho em 1, isso não muda nada na
+  # prática: cada stop isolado já aciona por conta própria, TP antes ou não.
+  consecutive_stops_trigger: 1    # cada stop já conta (antes exigia 2 seguidos)
+  cooldown_minutes_first: 30      # 1º stop do dia (por símbolo)
+  cooldown_minutes_escalated: 60  # 2º stop do dia
+  cooldown_minutes_max: 1440      # 3º stop em diante — 24h
 
 circuit_breakers:
   # Funding rate anômalo (abs) que suspende novas entradas.
