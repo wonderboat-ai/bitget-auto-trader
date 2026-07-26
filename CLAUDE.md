@@ -1,4 +1,4 @@
-# CLAUDE.md — Bybit Auto Trader (handoff 2026-07-25, ~19:xx UTC)
+# CLAUDE.md — Bybit Auto Trader (handoff 2026-07-26, ~19:5x UTC)
 
 Contexto vivo do projeto para agentes (Claude Code/Cowork). Fonte completa de
 regras: `INSTRUCOES-PROJETO-v2.md` v2 + `RASCUNHO-instrucoes-v7-colar-manualmente.md`
@@ -7,6 +7,64 @@ colada nas instruções do Claude Project — ver item 5 dos "Próximos passos")
 Guia operacional humano: `PASSO-A-PASSO.md` (bootstrapping — todas as etapas
 fechadas, ver seu próprio aviso de topo). Idioma de trabalho: português do
 Brasil. Comentários de código explicam causa raiz.
+
+**Novo (25-26/07): cooldown por símbolo ENDURECIDO pra 3 níveis + reset manual —
+já mesclado em `main`.** A pedido do Lucas ("ele tomou um stop e entrou de novo
+comprado agora. Não seria interessante acalmar e não comprar, porque está
+perdendo?"), o cooldown pós-stop (bug #30, 21/07) ficou mais agressivo:
+`consecutive_stops_trigger` foi de 2 pra **1** (cada stop ISOLADO já pausa o
+símbolo, não precisa mais de 2 seguidos) e ganhou um 3º nível de escalada —
+1º stop do dia (por símbolo, UTC) → 30min, 2º → 60min, **3º em diante → 24h**
+(`cooldown_minutes_max`, chave nova em `config/risk_config.yaml`). TP no meio
+continua quebrando a sequência (mesma lógica de sempre, só que agora sem
+efeito prático já que 1 stop isolado já dispara — mantido por precaução caso
+o gatilho suba de novo no futuro). **Novo: reset manual do cooldown antes do
+prazo natural** — `RiskManager.reset_cooldown(symbol)` (mesma filosofia do
+`reset_kill_switch`: nunca automático) + dois MCP tools novos,
+`trader_cooldown_status` (leitura — por símbolo, ativo/até quando/quantos
+acionamentos hoje) e `trader_reset_cooldown(symbol, confirm=True)` (canal
+`state/control.json` → `engine._apply_control_signal`, mesmo padrão
+desacoplado do halt/reset do kill switch). Suíte cresceu pra **252/252**
+(244 smoke + 8 ciclo — 18 checks novos de cooldown: 3 níveis, TP reseta
+`consecutive_stops`, reset manual libera antes do prazo, reset sem cooldown
+ativo é no-op seguro sem evento fantasma). **Confirmado ao vivo no mesmo dia**:
+1º acionamento real (ETH, 25/07 23:21 UTC) já disparou com 1 stop isolado
+(exatamente o pedido do Lucas); escalada 30→60min também confirmada ao vivo
+(ETH, 26/07 00:58 e 08:01 UTC). **Pendência**: as duas ferramentas MCP novas
+só valem depois de reiniciar o Claude Desktop (não recarrega `mcp_server.py`
+sozinho — mesma regra de sempre) — Lucas já reiniciou e confirmou as duas
+funcionando.
+
+**Incidente do mesmo dia (26/07, ~19h UTC), JÁ RESOLVIDO: crash-loop do
+supervisor + quase-duas-instâncias — causa raiz foi um processo de
+diagnóstico meu, não um bug no código.** Durante uma investigação de
+`cycle_error` recorrente (falha intermitente da testnet ao ler
+`wallet-balance` — populacional, autolimitada, não é bug), subi um `main.py
+--live` manual (fora do `supervisor.py`) pra diagnosticar. Duas tentativas de
+parar ele de forma limpa (`CTRL_C_EVENT` via ctypes, a técnica de sempre)
+FALHARAM sem eu perceber na hora — o processo ficou vivo, órfão, sem
+supervisão. Enquanto isso, o Lucas (ou o próprio supervisor, não confirmado
+qual) tentou subir um `supervisor.py --live` novo — e cada tentativa dele de
+spawnar `main.py` colidia com o processo órfão que eu tinha deixado pra trás
+(disputa pelos mesmos arquivos de estado em `state/*.json`, sincronizados via
+OneDrive), morrendo quase instantaneamente (`exit_code=1`, <0,2s de vida) —
+visto na trilha como 6 `engine_crash_restart` seguidos até
+`engine_supervisor_giveup` (teto de 5 tentativas/30min esgotado). **Rodar
+`main.py`/`supervisor.py` isolados, sem o processo órfão por perto,
+funcionou perfeitamente em todos os testes** — confirma que não é bug de
+código. Resolvido derrubando o processo órfão à força (`Stop-Process
+-Force`, já que o `CTRL_C_EVENT` remoto não estava alcançando esse processo
+específico — não fica claro por quê; pode ser por ele ter sido iniciado via
+job em background do Bash/git-bash em vez de uma janela de console real
+como o método normal usa) — depois disso, a tentativa seguinte do
+`supervisor.py` subiu limpo na hora. **Lição pra sessões futuras**: se um
+processo de diagnóstico `main.py --live` avulso for iniciado fora do
+`supervisor.py` pra investigar algo, CONFIRMAR que ele realmente morreu
+(checar processo, não só assumir que o `CTRL_C_EVENT` funcionou) antes de
+seguir em frente — um órfão vivo pode causar exatamente este tipo de
+crash-loop confuso em qualquer tentativa de restart subsequente, sua ou do
+Lucas. Estado ao final: uma única instância rodando, via `supervisor.py`,
+saudável.
 
 **Novo (25/07): repositório GitHub PRIVADO dedicado criado — `wonderboat-ai/bybit-auto-trader`
 — para viabilizar um 2º PC rodando o motor 24h.** A pedido do Lucas ("configurar
@@ -2001,9 +2059,12 @@ mais), `naked_position_close` (SÓ quando o fechamento de emergência
 SUCEDEU), `naked_position_close_failed` (fechamento falhou — POSIÇÃO NUA
 REAL, intervenção manual), `kill_switch_tripped/reset`, `cooldown_triggered`
 (NOVO 21/07 — `symbol`, `consecutive_stops`, `cooldown_minutes`,
-`cooldown_until`, `trigger_number_today`; dispara quando `stops seguidos`
-no mesmo símbolo atingem o gatilho configurado, ver bug #30),
-`engine_crash_restart` (NOVO 22/07 — só aparece se rodando via
+`cooldown_until`, `trigger_number_today`; desde 25/07 dispara já no 1º stop
+isolado do símbolo, ver bug #30 e a entrada "cooldown ENDURECIDO" no topo
+do arquivo), `cooldown_reset` (NOVO 25/07 — `symbol`,
+`previous_cooldown_until`; reset MANUAL antes do prazo natural, via MCP
+`trader_reset_cooldown`, nunca automático), `engine_crash_restart` (NOVO
+22/07 — só aparece se rodando via
 `supervisor.py`; `exit_code`, `uptime_sec`, `attempt_in_window` — processo
 caiu sozinho e foi religado automaticamente), `engine_supervisor_giveup`
 (NOVO 22/07 — idem; supervisor excedeu o teto de restarts na janela e
@@ -2099,9 +2160,15 @@ REAL contra respostas no formato do ccxt [não só o client já convertido]
 incl. campos `None` não passando como confirmados e histórico vazio sem
 `IndexError`, e o GATE em si — zero chamada de rede com
 `decision.strategy: deterministic`, chamada real só com o gate aberto**)
-CONFIRMADOS 199/199 numa rodada oficial da suíte com o motor parado, e
+CONFIRMADOS 199/199 numa rodada oficial da suíte com o motor parado — **+ 25-26/07
+(seção 23 reescrita, cooldown endurecido pra 3 níveis): 1 stop isolado já
+aciona (30min), 2º stop do dia escala pra 60min, 3º pra 1440min/24h, TP
+zera `consecutive_stops`, reset manual (`reset_cooldown`) libera antes do
+prazo e audita `cooldown_reset`, reset sem cooldown ativo é no-op sem
+evento fantasma — suíte final 244/244 smoke** — e
 `tests/test_ciclo.py` (8 checks: exclusividade por símbolo, limites
-intra-ciclo). Rodar da RAIZ:
+intra-ciclo). **Total 252/252**, confirmado com o motor parado antes do
+restart que ligou a feature. Rodar da RAIZ:
 
 ```powershell
 python tests\test_smoke.py
