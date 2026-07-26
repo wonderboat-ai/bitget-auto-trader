@@ -1,9 +1,9 @@
 # CLAUDE.md — Bybit Auto Trader (handoff 2026-07-26, ~19:5x UTC)
 
 Contexto vivo do projeto para agentes (Claude Code/Cowork). Fonte completa de
-regras: `INSTRUCOES-PROJETO-v2.md` v2 + `RASCUNHO-instrucoes-v7-colar-manualmente.md`
-(v7, 23/07 — atualiza fatos, não regra; ver seção "Status atual" lá; ainda NÃO
-colada nas instruções do Claude Project — ver item 5 dos "Próximos passos").
+regras: `INSTRUCOES-PROJETO-v2.md` v2 + `RASCUNHO-instrucoes-v8-colar-manualmente.md`
+(v8, 26/07 — atualiza fatos, não regra; ver seção "Status atual" lá; ainda NÃO
+colada nas instruções do Claude Project — substitui a v7, colada em 22/07).
 Guia operacional humano: `PASSO-A-PASSO.md` (bootstrapping — todas as etapas
 fechadas, ver seu próprio aviso de topo). Idioma de trabalho: português do
 Brasil. Comentários de código explicam causa raiz.
