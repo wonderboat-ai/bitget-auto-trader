@@ -34,8 +34,10 @@ class StrategyParams:
     # mudança de comportamento live e decisão do Lucas (walk-forward pode
     # ligar por injeção de params sem tocar o live).
     exit_on_signal: bool = False
-    # Trailing stop (20/07/2026): substitui o TP fixo por um stop que sobe
-    # travando lucro. Também desligado por default, pelo mesmo motivo.
+    # Trailing stop (20/07/2026): stop que sobe travando lucro. Desligado por
+    # default, pelo mesmo motivo do exit_on_signal. Convive com o TP fixo
+    # (tp_rr) desde 27/07/2026 — sai pelo que disparar primeiro: TP se o
+    # preço rally até o alvo, trailing se reverter antes disso.
     trailing: bool = False
 
     def as_dict(self) -> dict:
@@ -74,10 +76,15 @@ class DeterministicStrategy:
 
         if ema_fast > ema_slow and rsi < p.rsi_long_max:
             stop = price - p.atr_stop_mult * atr
-            # Trailing ligado -> SEM alvo fixo: o stop que sobe é o mecanismo
-            # de realização (deixa o lucro correr — o ponto das famílias de
-            # tendência que a pesquisa de 16/07 recomendou re-testar).
-            tp = None if p.trailing else price + p.tp_rr * (price - stop)
+            # Trailing e TP fixo coexistem (27/07/2026, a pedido do Lucas —
+            # "eu quero os dois"): antes, trailing=True zerava o alvo (`tp =
+            # None`), fazendo o lucro só realizar se o preço recuasse até o
+            # stop móvel — sem nenhum jeito de travar lucro num alvo caso o
+            # preço disparasse antes de reverter. tp_rr sempre calculado
+            # agora; engine.py/backtester.py já checavam take_profit e
+            # trailing de forma independente (o `None` aqui era o ÚNICO
+            # ponto do código que forçava exclusividade entre os dois).
+            tp = price + p.tp_rr * (price - stop)
             return Signal(
                 symbol=snap.symbol,
                 direction=Direction.LONG,
@@ -92,7 +99,8 @@ class DeterministicStrategy:
 
         if ema_fast < ema_slow and rsi > p.rsi_short_min:
             stop = price + p.atr_stop_mult * atr
-            tp = None if p.trailing else price - p.tp_rr * (stop - price)
+            # Trailing e TP fixo coexistem — ver comentário no ramo LONG acima.
+            tp = price - p.tp_rr * (stop - price)
             return Signal(
                 symbol=snap.symbol,
                 direction=Direction.SHORT,

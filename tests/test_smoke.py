@@ -1900,6 +1900,11 @@ ok("backtester: com exit_on_signal desligado NAO existe saida por sinal (default
 # dos 2 primeiros drafts deste teste). Este padrao da RSI~64 e ainda sobe
 # +0,4% a cada 2 candles; o trailing (1,5x ATR ~2% do preco) sobrevive aos
 # vales de -0,5% e so e atingido na reversao final de -0,6%/candle.
+# 27/07/2026: desde que trailing e TP fixo passaram a conviver (secao 29),
+# alguns destes trades fecham via take_profit ANTES da reversao final (o
+# rally bate o alvo tp_rr antes de qualquer vale forte) — os que sobram ate
+# a reversao ainda fecham via trailing_stop, cobertos pelas duas ultimas
+# asserções abaixo.
 def make_candles_wavy(n_up=120, n_down=60, start=100.0,
                       start_ts=1_752_000_000_000, tf_ms=900_000):
     rows, price = [], start
@@ -1920,16 +1925,31 @@ strat_bt_trail = DeterministicStrategy("daytrade", params=StrategyParams(trailin
 res_bt_trail = Backtester(cfg, strategy=strat_bt_trail).run("BTC/USDT:USDT", "15m", df_bt_trail)
 trail_trades = [t for t in res_bt_trail.trades if t.trailing]
 trail_stops = [t for t in trail_trades if t.exit_reason == "trailing_stop"]
-ok("backtester: trades com trailing existem e SEM take-profit fixo (deixa correr)",
-   len(trail_trades) >= 1 and all(t.take_profit is None for t in trail_trades),
+ok("backtester: trades com trailing TAMBEM tem take-profit fixo calculado "
+   "(27/07/2026 — antes virava None; trailing e TP fixo convivem agora, ver secao 29)",
+   len(trail_trades) >= 1 and all(t.take_profit is not None for t in trail_trades),
    f"n={len(trail_trades)}")
-ok("backtester: trailing acompanhou a subida e travou LUCRO na reversao (exit > entry)",
-   any(t.exit_reason == "trailing_stop" and t.exit_price > t.entry_price
+ok("backtester: TP fixo captura o rally (exit_reason=take_profit com lucro) "
+   "MESMO com trailing tambem ligado nesta mesma posicao (27/07/2026)",
+   any(t.exit_reason == "take_profit" and t.exit_price > t.entry_price
        for t in trail_trades),
    f"exits={[(t.exit_reason, round(t.exit_price or 0, 2), round(t.entry_price, 2)) for t in trail_trades]}")
 ok("backtester: nenhum fechamento de trailing PIOR que o stop inicial (nunca desce)",
    all(t.exit_price >= t.entry_price - t.trail_distance - 1e-6 for t in trail_stops),
    f"n_stops={len(trail_stops)}")
+
+# Reset do kill switch REAL (27/07/2026): o backtest acima instancia um
+# RiskManager de verdade (Backtester.__init__) sem isolar
+# KILL_SWITCH_STATE_PATH — com trailing+TP fixo convivendo (fix desta mesma
+# sessao), este cenario ondulado agora fecha trades o suficiente pra cruzar
+# o limite de drawdown diario (3,20% >= 3,0%) e disparar o kill switch DE
+# VERDADE, persistindo halted=True em state/kill_switch_state.json. Sem
+# este reset, o proximo teste que instancia RiskManager/Backtester (secao
+# 21e) herdava esse halt real e todo APROVADO virava veto silencioso —
+# achado ao rodar a suite completa pela primeira vez apos o fix de
+# trailing+TP (regressao real, nao intermitente: reproduz sempre).
+from src.risk import kill_switch_state as _ks_reset20g  # noqa: E402
+_ks_reset20g.save(False, "")
 
 
 # ---------- 21. correcoes da revisao adversarial de 20/07 ----------
@@ -3115,6 +3135,70 @@ sig_inf_direto = Signal(symbol="BTC/USDT:USDT", direction=Direction.LONG, convic
 dec_inf = RiskManager(cfg, environment="testnet").evaluate(sig_inf_direto, state, funding_rate=0.0, data_age_sec=0)
 ok("RiskManager: veta Signal com entry_price=inf mesmo vindo direto",
    not dec_inf.approved, dec_inf.reason)
+
+
+# ---------- 29. trailing + take-profit fixo coexistem (27/07/2026, a pedido
+# do Lucas: "eu quero os dois" — take_profit atingido cancela o stop e
+# realiza a mercado, trailing continua subindo o stop enquanto isso nao
+# acontece). Antes deste fix, `trailing=True` zerava o take_profit do sinal
+# (`tp = None if p.trailing else ...` em deterministic.py) — o UNICO ponto
+# do codigo que forcava exclusividade entre os dois mecanismos.
+# engine._check_spot_exits (linha ~404: `tp = protection.get("take_profit");
+# if tp and price >= tp: ...`) e backtester._try_close (linha ~282: `elif
+# trade.take_profit and high >= trade.take_profit`) JA checavam take_profit
+# e trailing de forma totalmente independente — nenhuma mudanca foi
+# necessaria la, so na estrategia (unica fonte da exclusividade). ----------
+from src.data.market_data import MarketSnapshot as MarketSnapshot29  # noqa: E402
+_candles29 = pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
+
+snap29_long = MarketSnapshot29(
+    symbol="BTC/USDT:USDT", timeframe="15m", last_price=100.0, funding_rate=None,
+    indicators={"ema_fast": 11.0, "ema_slow": 10.0, "rsi": 50.0, "atr": 2.0},
+    candles=_candles29)
+sig29_long = DeterministicStrategy("daytrade", params=StrategyParams(trailing=True)).generate(snap29_long)
+_stop29_long = 100.0 - 1.5 * 2.0  # atr_stop_mult default = 1.5
+_tp29_long = 100.0 + 2.0 * (100.0 - _stop29_long)  # tp_rr default = 2.0
+ok("estrategia: LONG com trailing=True AINDA calcula take_profit fixo (tp_rr) — "
+   "antes deste fix virava None e so a reversao no trailing realizava lucro",
+   sig29_long.direction == Direction.LONG and sig29_long.trailing is True
+   and sig29_long.take_profit is not None
+   and abs(sig29_long.take_profit - _tp29_long) < 1e-9
+   and abs(sig29_long.stop_price - _stop29_long) < 1e-9,
+   f"tp={sig29_long.take_profit} stop={sig29_long.stop_price}")
+
+snap29_short = MarketSnapshot29(
+    symbol="BTC/USDT:USDT", timeframe="15m", last_price=100.0, funding_rate=None,
+    indicators={"ema_fast": 9.0, "ema_slow": 10.0, "rsi": 50.0, "atr": 2.0},
+    candles=_candles29)
+sig29_short = DeterministicStrategy("daytrade", params=StrategyParams(trailing=True)).generate(snap29_short)
+_stop29_short = 100.0 + 1.5 * 2.0
+_tp29_short = 100.0 - 2.0 * (_stop29_short - 100.0)
+ok("estrategia: SHORT com trailing=True AINDA calcula take_profit fixo (tp_rr) — "
+   "mesmo fix do ramo LONG, aplicado ao ramo simetrico",
+   sig29_short.direction == Direction.SHORT and sig29_short.trailing is True
+   and sig29_short.take_profit is not None
+   and abs(sig29_short.take_profit - _tp29_short) < 1e-9
+   and abs(sig29_short.stop_price - _stop29_short) < 1e-9,
+   f"tp={sig29_short.take_profit} stop={sig29_short.stop_price}")
+
+# Regressao: sem trailing, o take_profit continua EXATAMENTE igual ao de
+# sempre (o fix so afeta o ramo trailing=True).
+sig29_notrail = DeterministicStrategy("daytrade", params=StrategyParams(trailing=False)).generate(snap29_long)
+ok("estrategia: sem trailing, take_profit permanece identico ao comportamento antigo (regressao)",
+   sig29_notrail.trailing is False
+   and abs(sig29_notrail.take_profit - _tp29_long) < 1e-9)
+
+# Prova de ponta a ponta (reusa o backtest da secao 20g/21, ja rodado acima
+# com trailing=True): o TP fixo realmente FECHA a posicao quando o preco
+# rally o suficiente, mesmo com o trailing tambem ativo na mesma posicao —
+# ja coberto pelas duas primeiras asserções da secao 20g (linhas acima,
+# `trail_trades`): "TAMBEM tem take-profit fixo calculado" e "TP fixo
+# captura o rally... MESMO com trailing tambem ligado".
+ok("secao 29: prova de ponta a ponta ja coberta pela secao 20g (reexecutar "
+   "aqui so pra deixar o vinculo explicito no relatorio de testes)",
+   len(trail_trades) >= 1 and any(t.exit_reason == "take_profit" for t in trail_trades)
+   and any(t.exit_reason == "trailing_stop" for t in trail_trades),
+   f"exit_reasons={[t.exit_reason for t in trail_trades]}")
 
 
 print()

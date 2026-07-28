@@ -14,6 +14,7 @@ OPORTUNIDADE de realizar lucro automaticamente, nunca a proteção contra perda.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from src.logger import _audit_path, get_logger
@@ -21,7 +22,40 @@ from src.logger import _audit_path, get_logger
 log = get_logger("protection_state")
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-STATE_PATH = ROOT / "state" / "spot_protections.json"
+
+
+def _resolve_state_path() -> Path:
+    """Destino do arquivo, com override por PROTECTION_STATE_PATH (relativo à
+    raiz) e isolamento por AMBIENTE — mesmo padrão de
+    `src/risk/kill_switch_state.py` (bug #39, 27/07/2026).
+
+    Achado ao vivo em 27/07/2026, no primeiro boot em mainnet: sem isto,
+    testnet e mainnet liam/gravavam o MESMO `state/spot_protections.json` —
+    proteções ANTIGAS de testnet (ETH/USDT, BTC/USDT) ainda estavam no
+    arquivo quando o motor subiu em mainnet pela primeira vez. O engine
+    tentou confirmar o fill dessas ordens (`stop_id`) contra a exchange
+    MAINNET, recebeu "order not found" (correto — essas ordens nunca
+    existiram lá) e reconciliou as duas como fechadas
+    (`reason="external_close_unconfirmed"`), fabricando 2 `trade_closed`
+    com PnL negativo (-62,73 USDT) que nunca aconteceram em mainnet —
+    justamente no dia em que a trilha foi zerada pra começar o PnL do zero.
+    Nenhum dinheiro real foi afetado (as ordens não existiam pra cancelar
+    nem vender), só a auditoria/PnL relatado ficou poluído. Corrigido com o
+    mesmo padrão: mainnet mantém o nome canônico (`spot_protections.json`);
+    testnet ganha arquivo próprio (`spot_protections-testnet.json`). Import
+    tardio de `config.settings` para evitar import circular, igual ao
+    módulo irmão."""
+    override = os.environ.get("PROTECTION_STATE_PATH")
+    if override:
+        p = Path(override)
+        return p if p.is_absolute() else ROOT / p
+    from config.settings import get_environment
+    if get_environment() == "testnet":
+        return ROOT / "state" / "spot_protections-testnet.json"
+    return ROOT / "state" / "spot_protections.json"
+
+
+STATE_PATH = _resolve_state_path()
 
 
 def load() -> dict[str, dict]:

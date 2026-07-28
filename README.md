@@ -46,7 +46,7 @@ Projeto Auto-trader/
 │   ├── data/market_data.py        # snapshot + indicadores (EMA/RSI/ATR)
 │   ├── context/providers.py       # macro/on-chain/derivativos (dossiê 3x/dia + Bybit direto, decisão #G — inertes até a Fase 3 ligar)
 │   ├── strategy/signal.py         # contrato Signal (fronteira decisão↔risco)
-│   ├── strategy/deterministic.py  # estratégia Fase 1 (sem LLM; trailing stop ligado em produção)
+│   ├── strategy/deterministic.py  # estratégia Fase 1 (sem LLM; trailing stop + take-profit fixo convivem em produção)
 │   ├── strategy/llm_strategy.py   # camada Claude (Fase 3, pronta/endurecida e desligada)
 │   ├── risk/risk_manager.py       # guardrails + veto + kill switch + cooldown por símbolo
 │   ├── execution/executor.py      # ordens idempotentes + stop obrigatório
@@ -290,10 +290,12 @@ verdade sobre o que fechou; `CLAUDE.md` tem o estado exato do dia. Resumo:
 - **Fase 5** — mainnet, size mínimo: **iniciada em 27/07/2026** (spot, ~24 USDT
   de equity, decisão explícita do Lucas) — derivativos/perp continuam
   bloqueados pra residente BR, mas SPOT não estava e foi confirmado ao vivo
-  (leitura de saldo real + ciclo aprovando entrada real); ver `CLAUDE.md`
-  ("27/07/2026 — O DIA DA TRANSIÇÃO") pro relato completo, incluindo a
-  auditoria de segurança rodada antes e um incidente de compliance da Bybit
-  (bloqueio no rearme do trailing stop) ainda em aberto.
+  (leitura de saldo real + ciclo aprovando entrada real). **Primeiro trade
+  real executado na madrugada de 28/07/2026** (ETH/USDT long); ver
+  `CLAUDE.md` ("27/07/2026 — O DIA DA TRANSIÇÃO") pro relato completo,
+  incluindo a auditoria de segurança rodada antes e um incidente de
+  compliance da Bybit (bloqueio no rearme do trailing stop) ainda em
+  aberto (intermitente — o trailing já moveu com sucesso mais de uma vez).
 - **Fase 6** — expansão (universo completo, ranking, infra 24/7): alerta ativo
   + restart automático feitos; fonte on-chain em tempo real (decisão #G)
   implementada; resto (universo, ranking) não iniciado.

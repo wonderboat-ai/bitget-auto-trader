@@ -1,12 +1,12 @@
-# CLAUDE.md — Bybit Auto Trader (handoff 2026-07-27, ~dia da virada pra MAINNET)
+# CLAUDE.md — Bybit Auto Trader (handoff 2026-07-27/28, ~madrugada pós-virada pra MAINNET)
 
 Contexto vivo do projeto para agentes (Claude Code/Cowork). Fonte completa de
-regras: `INSTRUCOES-PROJETO-v2.md` v2 + `RASCUNHO-instrucoes-v8-colar-manualmente.md`
-(v8, atualizado em 27/07 — ver "Status atual" lá; ainda NÃO colada nas
-instruções do Claude Project — substitui a v7, colada em 22/07). Guia
-operacional humano: `PASSO-A-PASSO.md` (bootstrapping testnet — todas as
-etapas fechadas, ver seu próprio aviso de topo). Idioma de trabalho:
-português do Brasil. Comentários de código explicam causa raiz.
+regras: `INSTRUCOES-PROJETO-v2.md` v2 + `RASCUNHO-instrucoes-v9-colar-manualmente.md`
+(v9, criado 28/07 — ver "Status atual" lá; ainda NÃO colada nas instruções
+do Claude Project — substitui a v8, que nunca chegou a ser colada, mesmo
+padrão da v6→v7). Guia operacional humano: `PASSO-A-PASSO.md` (bootstrapping
+testnet — todas as etapas fechadas, ver seu próprio aviso de topo). Idioma
+de trabalho: português do Brasil. Comentários de código explicam causa raiz.
 
 **27/07/2026 — O DIA DA TRANSIÇÃO DE TESTNET PARA MAINNET.** A pedido
 explícito do Lucas ("vamos rodar na mainnet", chave de API de mainnet
@@ -1805,6 +1805,124 @@ por exigirem decisão do Lucas ou terem sido achados só depois).
     arquivos agora zeram `state/spot_protections.json` pra `{}` logo após o
     backup, ANTES de qualquer teste rodar (restaurado ao final como
     sempre).
+
+## Decisão nova (28/07/2026 ~02:20 UTC): trailing e take-profit fixo passam a conviver
+
+A pedido explícito do Lucas ("eu quero os dois" — depois de eu explicar que
+`trailing: true` zerava o take-profit fixo por design desde 22/07), o
+**único** ponto do código que forçava exclusividade entre os dois mecanismos
+foi removido: `src/strategy/deterministic.py` calculava `tp = None if
+p.trailing else price + p.tp_rr * (price - stop)` — agora sempre calcula o
+`tp` (mesma fórmula de sempre, `tp_rr` do YAML/default 2.0), com ou sem
+trailing. **Nenhuma outra mudança foi necessária**: `engine.py`
+(`_check_spot_exits`, linha ~404: `tp = protection.get("take_profit"); if tp
+and price >= tp: ...`) e `backtester.py` (`_try_close`, linha ~282) já
+checavam `take_profit` e `trailing` de forma totalmente independente —
+bastava a estratégia parar de zerar o `tp`. Efeito prático: a posição sai
+pelo que disparar primeiro — TP fixo (cancela o stop, vende a mercado) se o
+preço subir até o alvo `tp_rr`, ou o stop móvel se reverter antes disso.
+Validado com um backtest sintético isolado (candle onduladO, mesmo cenário
+já usado na seção 20g de `tests/test_smoke.py`): de 10 trades com trailing,
+4 fecharam via `take_profit` (lucro travado no alvo) e 6 via `trailing_stop`
+— confirma os dois mecanismos coexistindo de ponta a ponta. **Achado
+colateral, não é bug, só efeito emergente esperado**: como o TP agora
+realiza lucro mais cedo em pernas de alta, o motor reentra com mais
+frequência nas oscilações — alguns dos fechamentos por `trailing_stop`
+nesse cenário sintético foram pequenas perdas nos vaivéns entre entradas
+(sem o TP, uma única posição teria "surfado" a alta inteira até a reversão
+final). Isso é o comportamento literalmente pedido (realizar no alvo em vez
+de sempre deixar correr), não uma regressão. **Exige restart do motor pra
+valer** (Python não recarrega módulo em processo já rodando) — a posição
+ETH/USDT já aberta nasceu sem TP (`take_profit: null`, trailing=True) e foi
+atualizada MANUALMENTE na sequência (ver bug #47 abaixo) a pedido do Lucas;
+só entradas NOVAS a partir do próximo restart calculam os dois sozinhas.
+
+**Suíte completa RODADA em seguida, motor parado (a pedido do Lucas: "roda
+a suíte completa quando o motor parar")** — achou e corrigiu uma REGRESSÃO
+real de teste antes de fechar como validado: o próprio backtest sintético
+da seção 20g (candle ondulado, usado pra provar trailing+TP convivendo)
+passou a fechar trades agressivo o suficiente para cruzar o limite de
+drawdown diário (3,20% ≥ 3,0%) e disparar o kill switch DE VERDADE —
+`Backtester.__init__` instancia um `RiskManager` real sem isolar
+`KILL_SWITCH_STATE_PATH`, então esse trip persistia em
+`state/kill_switch_state.json` de verdade e vazava pro PRÓXIMO teste que
+instancia `RiskManager`/`Backtester` (seção 21e, sem nenhuma relação com
+trailing/TP) — reproduzia sempre, não intermitente: `Backtester(cfg,
+profile="daytrade").run(...)` da seção 21e passou a dar 0 trades (kill
+switch herdado bloqueando tudo) em vez do 1 trade esperado. Causa raiz: uma
+lacuna de isolamento PRÉ-EXISTENTE na suíte (só backup/restore uma vez no
+início/fim do arquivo inteiro via atexit, nunca por seção) que nunca tinha
+se manifestado porque o cenário ondulado antigo (trailing sem TP) nunca
+cruzava o limite de drawdown. Corrigido com um reset pontual do kill switch
+real (`kill_switch_state.save(False, "")`) logo após o backtest da seção
+20g — mais simples e seguro que isolar toda a suíte por env var, e
+suficiente pra parar de vazar pro teste seguinte. **Suíte final: 261/261 em
+`test_smoke.py` (257 pré-existentes + 4 novos da seção 29) + 8/8 em
+`test_ciclo.py` = 269/269 verde**, confirmado com o motor genuinamente
+parado (checado via lista de processos, não só a trilha). Arquivos reais
+(`state/spot_protections.json` com o TP aplicado no bug #47,
+`state/kill_switch_state.json`, `state/cooldown_state.json`,
+`logs/audit.jsonl`) verificados intactos e corretamente restaurados depois
+da suíte — nenhuma contaminação residual.
+
+## Bug corrigido em 27/07 (madrugada de 28/07 UTC, primeiro boot `--live` em mainnet — não reintroduzir)
+
+46. `src/execution/protection_state.py`: **`state/spot_protections.json` não
+    era isolado por AMBIENTE** — mesma classe do bug #39 (kill_switch/
+    cooldown), mas nunca estendida a este arquivo. Achado AO VIVO no
+    primeiro `engine_start` real em mainnet (2026-07-28 01:53:11 UTC,
+    `supervisor.py --live`): o arquivo ainda tinha 2 proteções RESIDUAIS da
+    era testnet (ETH/USDT entry_price=1910,31; BTC/USDT entry_price=66106,10
+    — valores incompatíveis com a equity real de mainnet, ~24 USDT). O
+    engine tentou confirmar o fill dessas ordens de stop contra a exchange
+    MAINNET, recebeu "order not found" (correto — nunca existiram lá) e
+    reconciliou as duas como fechadas (`reason="external_close_unconfirmed"`),
+    fabricando 2 `trade_closed` com PnL negativo total de **-62,73 USDT**
+    que nunca aconteceram em mainnet — no mesmo dia em que `logs/audit.jsonl`
+    tinha sido zerado pra começar o PnL de mainnet do zero. **Nenhum
+    dinheiro real foi afetado** (as ordens não existiam pra cancelar nem
+    vender); só a trilha/PnL relatado ficou poluído. Corrigido na fonte, a
+    pedido do Lucas ("pode limpar a trilha e corrigir o isolamento por
+    ambiente"): `_resolve_state_path()` novo, mesmo padrão de
+    `kill_switch_state.py` — override por `PROTECTION_STATE_PATH` +
+    resolução por `ENVIRONMENT` (mainnet mantém `spot_protections.json`;
+    testnet ganha `spot_protections-testnet.json`). **Exige restart do
+    motor pra valer** (Python não recarrega módulo em processo já rodando)
+    — não aplicado ainda ao processo `--live` corrente (só mainnet ativo
+    neste PC agora, risco baixo até o próximo restart natural). Trilha
+    corrigida: os 2 `trade_closed` fabricados foram movidos (não apagados)
+    pra `Historico-Testnet-2026-07-27/audit-fabricado-boot-mainnet-2026-07-27.jsonl`,
+    com um `audit_maintenance` novo (3º da história do projeto, mesmo
+    padrão de 15/07 e 21/07) documentando a correção — `trader_realized_pnl`
+    voltou a reportar 0 trades fechados/0 USDT em mainnet, refletindo a
+    realidade (só a posição ETH/USDT real, aberta às 01:53:26 UTC, segue
+    ativa). **Lição**: qualquer arquivo de estado local novo (`state/*.json`)
+    precisa do MESMO isolamento por ambiente desde o início — este e o #39
+    já são 2 casos do mesmo padrão de bug.
+
+47. Aplicação manual do take-profit retroativo na posição ETH/USDT real
+    (28/07/2026 ~02:53 UTC, a pedido explícito do Lucas: "sim, aplica o TP
+    na posição atual"). Calculado com a MESMA fórmula da estratégia
+    (`entry_price + tp_rr * trail_distance` — usa `trail_distance`, a
+    distância de risco ORIGINAL fixa desde a entrada, não o `stop_price`
+    atual que já subiu com o trailing): `1875,64 + 2,0 × 41,74714... =
+    1959,134285714286`. Aplicado direto em `state/spot_protections.json`
+    via script isolado (só leitura/escrita do JSON — não passa pelo
+    `Executor`, não cria/cancela nenhuma ordem real, só o alvo que o
+    `_check_spot_exits` do engine já confere a cada ciclo). **Erro meu,
+    achado e corrigido na mesma sessão**: o script importou `src.logger`
+    direto sem passar por `config.settings` antes — como `load_dotenv()`
+    só roda no import de `config.settings` (`src/logger.py` lê
+    `os.environ.get("ENVIRONMENT", "testnet")` cru, sem carregar o `.env`
+    sozinho), o evento de auditoria `protection_take_profit_manually_set`
+    saiu gravado com `environment: testnet` — o TP em si estava certo
+    (aplicado de verdade na posição real de mainnet), só o RÓTULO do
+    evento. Corrigido in-place (não é evento fabricado, só metadado
+    errado) + `audit_maintenance` documentando a causa e a correção.
+    **Lição**: qualquer script avulso que chame `audit()`/leia `ENVIRONMENT`
+    precisa importar `config.settings` (ou rodar via um entry point que já
+    o importe) ANTES de qualquer outra coisa — `src/logger.py` sozinho não
+    carrega o `.env`.
 
 ## Estado exato — 21/07 ~21:25 UTC (investigação do whipsaw ETH + cooldown)
 
