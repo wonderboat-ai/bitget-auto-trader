@@ -48,10 +48,25 @@ def get_logger(name: str, level: str = "INFO") -> logging.Logger:
 
 
 def audit(event: str, **payload) -> None:
-    """Anexa um evento estruturado à trilha de auditoria."""
+    """Anexa um evento estruturado à trilha de auditoria.
+
+    Todo evento carrega `environment` (testnet/mainnet, de os.environ —
+    igual à leitura crua que config.settings.get_environment() faz, sem
+    importar esse módulo aqui pra não acoplar o logger de baixo nível à
+    config; sem validação de valor, é só rótulo informativo, nunca deve
+    fazer audit() lançar exceção). Antes, só o evento `engine_start`
+    carregava esse campo (via payload explícito, que continua tendo
+    prioridade abaixo) — todo resto da trilha (`trade_closed`,
+    `order_executed`, `signal_approved` etc.) era MUDO sobre em qual
+    ambiente rodou. Achado por revisão adversarial em 27/07/2026
+    (transição testnet->mainnet): sem isso, as ferramentas MCP de leitura
+    (`state_reader.py`) não tinham como sinalizar se um evento retornado
+    veio de testnet ou mainnet, caso os dois algum dia se misturem na
+    mesma trilha de novo."""
     record = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "event": event,
+        "environment": os.environ.get("ENVIRONMENT", "testnet").strip().lower(),
         **payload,
     }
     with open(_audit_path(), "a", encoding="utf-8") as fh:

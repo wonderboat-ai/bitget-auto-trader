@@ -81,8 +81,11 @@ minuto vive em `CLAUDE.md`, que muda mais rápido do que este documento deveria.
 ## 1. Objetivo do projeto
 
 Sistema de decisão assistida por IA com execução automatizada e supervisão humana,
-para day trade + swing trade de cripto na Bybit. Full-auto com guardrails. Começa
-em testnet, só migra para capital real depois que cada fase anterior fechar.
+para day trade + swing trade de cripto na Bybit. Full-auto com guardrails. Começou
+em testnet; migrou para capital real (mainnet spot, ~24 USDT) em 27/07/2026,
+decisão explícita do Lucas — ver "Status atual" e CLAUDE.md pro relato completo
+do dia da transição. Perpétuos/derivativos continuam bloqueados (pendência
+regulatória BR); só spot está liberado pra mainnet.
 
 **Visão de produto (estado final):** o sistema varre os pares USDT da Bybit que
 passarem num filtro de liquidez, roda análise completa por ativo (técnica + macro +
@@ -145,8 +148,11 @@ caminho crítico.
 **4. Camada de risco — poder de veto absoluto**
 [HOJE, implementado e testado]
 - Risco por trade 0,5% do capital, nunca calculado pelo LLM.
-- Sizing derivado da distância até o stop. Teto de capital por trade: 20%
-  do equity, CLAMPA (nunca veta).
+- Sizing derivado da distância até o stop. Teto de capital por trade:
+  **100% do equity** (ELEVADO de 20% em 27/07/2026, decisão do Lucas — com
+  equity pequeno no início do teste em mainnet, 20% cortava o nocional
+  abaixo do mínimo de ordem da Bybit spot; reavaliar se o capital crescer),
+  CLAMPA (nunca veta).
 - Stop obrigatório e dinâmico (1,5×ATR ou trailing). Sem stop, sem trade.
   Stop re-ancorado no preço REAL do fill.
 - Kill switch por drawdown: 3% diário / 15% total; reset SEMPRE manual; sem
@@ -267,7 +273,8 @@ de regime; latência compatível com timeframe.
 
 **Implementado e validado ao vivo:** separação decisão/risco/execução; ciclo
 completo entrada→proteção→saída lucrativa na exchange real; stop dinâmico
-re-ancorado no fill; trailing stop em produção; teto de 20% por trade; kill
+re-ancorado no fill; trailing stop em produção; teto de 100% por trade
+(elevado de 20% em 27/07/2026, capital pequeno em mainnet); kill
 switch persistente através de restarts; **cooldown por símbolo de 3 níveis
 com reset manual (endurecido e confirmado ao vivo em 25-26/07)**; TP por
 software em spot; auditoria completa com pnl honesto; backtest/walk-forward
@@ -296,14 +303,23 @@ Carlo; regime; decaimento; WebSocket.
   `temperature` da chamada (Sonnet 5 rejeita valor não-padrão com erro
   400) — achado nesta sessão, ainda não corrigido no código. Decisão do
   Lucas, sem pressa.
-- **Revisitar se o bloqueio regulatório da Fase 5 é só sobre derivativos**
-  — desde a migração pra spot (#E), ninguém confirmou se mainnet SPOT
-  especificamente continua bloqueado pra residente BR.
-- Situação regulatória Bybit/Brasil (bloqueia Fase 5, ver ressalva acima).
+- ~~Revisitar se o bloqueio regulatório da Fase 5 é só sobre derivativos~~
+  — **RESOLVIDO em 27/07/2026**: mainnet SPOT NÃO está bloqueado pra
+  residente BR — confirmado ao vivo (leitura de saldo real, ciclo
+  `--once` aprovando entrada real). Só derivativos/perp continuam
+  bloqueados.
 - Ratificar os números de risco do YAML em operação (incl. os novos
-  valores de cooldown: 30/60/1440min).
+  valores de cooldown: 30/60/1440min, e o teto de capital por trade
+  elevado pra 100% em 27/07/2026 por causa do equity pequeno inicial).
 - Seleção diária de universo por macro/on-chain (ideia de 16/07, adiada).
-- Antes de mainnet: `.env` fora do OneDrive.
+- **Pendência real, não resolvida**: `.env` continua dentro do OneDrive —
+  foi um risco aceito conscientemente pra viabilizar a virada de
+  27/07/2026, não um esquecimento. Revisitar se/quando fizer sentido tirar
+  os segredos de mainnet do caminho sincronizado.
+- **Novo (27/07/2026), não resolvido**: bloqueio de compliance da Bybit
+  (retCode 10024/KYC_PROMPT_TOAST) no REARME do trailing stop em spot —
+  ver CLAUDE.md pro relato completo. Trailing continua ligado; decisão do
+  Lucas de não mexer no código/config por enquanto.
 
 ---
 *Referência técnica interna do projeto — não é conteúdo institucional Wonder

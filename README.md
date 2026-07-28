@@ -287,10 +287,13 @@ verdade sobre o que fechou; `CLAUDE.md` tem o estado exato do dia. Resumo:
   (`decision.strategy: deterministic`).
 - **Fase 4** — supervisão via MCP: servidor registrado e validado ponta a ponta;
   ganhou watchdog agendado + restart automático do processo (`supervisor.py`).
-- **Fase 5** — mainnet, size mínimo: **bloqueada** por pendência regulatória
-  (derivativos Bybit vetados para residente BR — se isso também bloqueia SPOT
-  especificamente não foi revisitado desde a migração pra spot; ver seção 10 de
-  `INSTRUCOES-PROJETO-v2.md`).
+- **Fase 5** — mainnet, size mínimo: **iniciada em 27/07/2026** (spot, ~24 USDT
+  de equity, decisão explícita do Lucas) — derivativos/perp continuam
+  bloqueados pra residente BR, mas SPOT não estava e foi confirmado ao vivo
+  (leitura de saldo real + ciclo aprovando entrada real); ver `CLAUDE.md`
+  ("27/07/2026 — O DIA DA TRANSIÇÃO") pro relato completo, incluindo a
+  auditoria de segurança rodada antes e um incidente de compliance da Bybit
+  (bloqueio no rearme do trailing stop) ainda em aberto.
 - **Fase 6** — expansão (universo completo, ranking, infra 24/7): alerta ativo
   + restart automático feitos; fonte on-chain em tempo real (decisão #G)
   implementada; resto (universo, ranking) não iniciado.

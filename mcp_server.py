@@ -23,7 +23,12 @@ import os
 
 from mcp.server.fastmcp import FastMCP
 
-from config.settings import get_credentials, get_market_type, load_risk_config
+from config.settings import (
+    get_credentials,
+    get_environment,
+    get_market_type,
+    load_risk_config,
+)
 from src.exchange.bybit_client import BybitClient
 from src.supervision.state_reader import StateReader
 
@@ -208,12 +213,21 @@ def _write_control_signal(action: str, reason: str, symbol: str | None = None) -
     """Escreve um sinal de controle que o engine lê no próximo ciclo.
 
     Desacopla o MCP do engine: o MCP não controla o processo do engine diretamente,
-    só deixa um sinal em disco. O engine decide como agir — mantém a fronteira limpa."""
+    só deixa um sinal em disco. O engine decide como agir — mantém a fronteira limpa.
+
+    Rotula o sinal com o ambiente (testnet/mainnet) ATUAL do processo MCP no
+    momento da escrita — achado de auditoria (lente "isolamento_estado",
+    27/07/2026): sem isto, um pedido feito pensando em testnet podia ficar
+    parado em state/control.json e ser consumido cegamente por um engine já
+    reiniciado em mainnet (ou vice-versa), sem nenhum registro de para qual
+    ambiente o pedido era. O engine confere este campo antes de agir
+    (_apply_control_signal)."""
     from pathlib import Path
     from datetime import datetime, timezone
     ctrl_dir = Path(__file__).resolve().parent / "state"
     ctrl_dir.mkdir(exist_ok=True)
     payload = {"action": action, "reason": reason,
+               "environment": get_environment(),
                "ts": datetime.now(timezone.utc).isoformat()}
     if symbol is not None:
         payload["symbol"] = symbol

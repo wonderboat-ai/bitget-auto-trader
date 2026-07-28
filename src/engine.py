@@ -556,9 +556,39 @@ class Engine:
             amount = min(free, tracked) if tracked is not None else free
             rearm_size = self.client.amount_to_precision(symbol, amount)
             if rearm_size <= 0:
-                # Saldo zerado após cancelar: o stop antigo disparou
-                # CONCORRENTE ao trailing move — mesma reconciliação do
-                # caminho de saída (nunca deixar fechamento mudo na trilha).
+                # Saldo zerado após cancelar tem DUAS causas possíveis (achado
+                # da auditoria de 27/07/2026, mesmo raciocínio já aplicado em
+                # _execute_spot_exit pelo fix #27 de 21/07, nunca propagado
+                # pra cá): (a) o stop antigo disparou CONCORRENTE ao trailing
+                # move — fechamento real; (b) o cancel_all() FALHOU (rede) e o
+                # saldo continua preso na ordem de stop AINDA VIVA — a posição
+                # está aberta. Tratar (b) como (a) fabricaria um trade_closed
+                # falso e apagaria o rastreio de uma posição real e protegida.
+                # Antes de reconciliar, confirma que o stop NÃO está mais
+                # ativo.
+                stop_id = protection.get("stop_id")
+                if stop_id:
+                    try:
+                        stop_order = self.client.fetch_order(stop_id, symbol)
+                        if (stop_order or {}).get("status") in ("open", "untriggered"):
+                            log.error("Trailing de %s: saldo zerado mas o stop "
+                                      "%s AINDA está ativo — cancel_all deve "
+                                      "ter falhado; proteção mantida, retry no "
+                                      "próximo ciclo", symbol, stop_id)
+                            audit("trailing_move_stop_still_active", symbol=symbol,
+                                  error="saldo base preso em stop ainda ativo "
+                                        "(cancel_all provavelmente falhou)")
+                            return {**protection, "peak_price": peak}
+                    except Exception as exc:  # noqa: BLE001
+                        # Sem confirmação -> segue o fluxo antigo (reconciliar
+                        # é melhor que silenciar; _handle_spot_position_closed
+                        # ainda tenta confirmar o fill por conta própria).
+                        log.warning("Sem consulta do stop %s de %s: %s",
+                                    stop_id, symbol, exc)
+                # Fechamento concorrente confirmado (ou inconfirmável): o stop
+                # antigo disparou CONCORRENTE ao trailing move — mesma
+                # reconciliação do caminho de saída (nunca deixar fechamento
+                # mudo na trilha).
                 log.info("Trailing de %s: saldo base zerado após cancelar — "
                          "provável fechamento concorrente pelo stop; "
                          "reconciliando", symbol)
@@ -734,6 +764,23 @@ class Engine:
             sell_amount = min(free, tracked) if tracked is not None else free
             size = self.client.amount_to_precision(symbol, sell_amount)
             if size <= 0:
+                # Reconfirma UMA vez antes de diagnosticar (mesma classe de
+                # leitura atrasada/racy do bug #29, 21/07/2026 — lá era a
+                # leitura pós-COMPRA; aqui é a leitura pós-CANCEL_ALL): o
+                # cancel_all acima pode ter liberado o saldo de verdade, só
+                # que esta leitura específica ainda não o reflete assentado.
+                # Sem isto, o diagnóstico via stop_id logo abaixo só distingue
+                # "cancel_all falhou" (stop ainda aberto/untriggered) de
+                # "fechou" — não distingue "cancel_all funcionou mas a
+                # leitura veio atrasada" (posição ainda aberta, agora sem
+                # stop) de "fechou de verdade", e trataria a primeira como a
+                # segunda: fabricaria um trade_closed e apagaria o rastreio
+                # de uma posição real e agora desprotegida (achado da revisão
+                # adversarial de 27/07/2026).
+                free = self.client.fetch_free_base(symbol)
+                sell_amount = min(free, tracked) if tracked is not None else free
+                size = self.client.amount_to_precision(symbol, sell_amount)
+            if size <= 0:
                 # Saldo zerado após cancelar tem DUAS causas possíveis:
                 # (a) o stop real disparou CONCORRENTE à saída (cancel_all só
                 #     libera o saldo depois de rodar) — fechamento real;
@@ -830,12 +877,58 @@ class Engine:
                     except Exception as save_exc:  # noqa: BLE001
                         log.warning("Stop re-armado mas falha ao persistir novo "
                                     "stop_id de %s: %s", symbol, save_exc)
+                else:
+                    # rearm_size <= 0: sem exceção nenhuma, então o except de
+                    # baixo NUNCA disparava e o re-arm ficava mudo — nem log
+                    # crítico, nem evento na trilha (achado da revisão
+                    # adversarial de 27/07/2026). Duas causas possíveis, sem
+                    # como distinguir só com este dado: (a) a venda teve
+                    # sucesso real do lado da Bybit antes da exceção estourar
+                    # no cliente (saldo de fato zerado — o loop de
+                    # reconciliação do topo do ciclo confirma isso); ou (b) a
+                    # venda falhou DE VERDADE e esta leitura veio
+                    # atrasada/racy (mesma classe do bug #29 de 21/07, nunca
+                    # replicado neste caminho) — a posição segue aberta e SEM
+                    # NENHUM stop, já que o cancel_all no topo da função
+                    # cancelou o antigo. Audita como falha de re-arm (mesmo
+                    # evento crítico do except abaixo) em vez de silenciar.
+                    log.critical(
+                        "Re-arm de stop de %s (apos %s falhar) leu saldo "
+                        "zerado/insuficiente (%.8f) pra re-armar — SEM "
+                        "CONFIRMACAO se a posicao ja fechou ou se e leitura "
+                        "atrasada; POSICAO PODE ESTAR SEM PROTECAO NENHUMA, "
+                        "intervir manualmente: %s",
+                        symbol, kind, rearm_amount, exc)
+                    audit(ev["rearm_failed"], symbol=symbol,
+                          exit_error=str(exc),
+                          rearm_error=(f"saldo zerado/insuficiente ao tentar "
+                                       f"re-armar (free_now={free_now}) — sem "
+                                       "confirmacao se a posicao ja fechou"))
             except Exception as rearm_exc:  # noqa: BLE001
                 log.critical("FALHA AO RE-ARMAR STOP de %s apos %s falhar — "
-                             "POSICAO SEM PROTECAO NENHUMA, intervir manualmente: %s",
-                             symbol, kind, rearm_exc)
-                audit(ev["rearm_failed"], symbol=symbol,
-                      exit_error=str(exc), rearm_error=str(rearm_exc))
+                             "tentando liquidacao de emergencia antes de "
+                             "desistir: %s", symbol, kind, rearm_exc)
+                # Última tentativa antes de desistir (achado da auditoria de
+                # 27/07/2026): re-armar o stop usa set_stop_loss — a MESMA
+                # chamada condicional (tpslOrder em spot) que o incidente de
+                # hoje confirma sujeita a bloqueio de compliance. Uma venda a
+                # MERCADO simples (sem stopLossPrice) não passa por essa
+                # categoria — mesma filosofia do fechamento de emergência já
+                # usado na ENTRADA (executor.py): não consegue proteger ->
+                # elimina o risco fechando de vez, em vez de só alertar.
+                try:
+                    free_liq = self.client.fetch_free_base(symbol)
+                    tracked_liq = protection.get("size")
+                    liq_amount = (min(free_liq, tracked_liq)
+                                  if tracked_liq is not None else free_liq)
+                except Exception:  # noqa: BLE001
+                    liq_amount = 0.0
+                liquidated = self._emergency_liquidate(
+                    symbol, liq_amount, kind,
+                    prior_error=f"exit_error={exc}; rearm_error={rearm_exc}")
+                if not liquidated:
+                    audit(ev["rearm_failed"], symbol=symbol,
+                          exit_error=str(exc), rearm_error=str(rearm_exc))
             return
 
         # Confere quanto REALMENTE foi vendido: uma ordem a mercado pode
@@ -845,6 +938,30 @@ class Engine:
         # posição real sem proteção (o stop original já foi cancelado) sem
         # ninguém perceber, já que a proteção era limpa incondicionalmente.
         filled = order.get("filled")
+        # 'filled' vindo 0 EXPLÍCITO (diferente de ausente/None, que já cai
+        # no fallback deliberado "assume 100% preenchido" logo abaixo — sem
+        # risco, porque `remaining` fica 0 e nenhum re-arm é tentado) tem um
+        # efeito bem mais perigoso: `sold` vira 0.0 e o bloco de "fill
+        # parcial" mais abaixo tenta re-armar um stop pro TAMANHO INTEIRO de
+        # uma posição que a resposta pode só não ter refletido ainda —
+        # mesma classe de resposta incompleta/stale já documentada pra
+        # average/price em ordem a mercado desta mesma exchange (bugs
+        # #17/#19/#25). O re-arm do tamanho inteiro falharia por saldo
+        # insuficiente e dispararia um alarme CRÍTICO falso de "posição sem
+        # proteção" pra uma venda que na verdade teve sucesso (achado da
+        # revisão adversarial de 27/07/2026). Reconfirma via fetch_order
+        # (mesma técnica já usada em executor.py pro preço de entrada) antes
+        # de aceitar um 0 explícito como venda realmente zerada.
+        if filled == 0 and order.get("id"):
+            try:
+                confirmed = self.client.fetch_order(order.get("id"), symbol)
+                if confirmed and confirmed.get("filled"):
+                    filled = confirmed.get("filled")
+                    order = confirmed
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Sem confirmacao do fill via fetch_order de %s "
+                            "(%s) apos 'filled'=0 na resposta da venda: %s",
+                            symbol, order.get("id"), exc)
         sold = float(filled) if filled is not None else size
         fill_price = order.get("average") or order.get("price") or price
         entry_price = protection.get("entry_price") or 0.0
@@ -904,10 +1021,20 @@ class Engine:
                                                       protection["stop_price"])
             except Exception as rearm_exc:  # noqa: BLE001
                 log.critical("%s parcial em %s e FALHA ao re-armar stop do "
-                             "restante — POSIÇÃO SEM PROTEÇÃO, intervir "
-                             "manualmente: %s", kind, symbol, rearm_exc)
-                audit(ev["rearm_failed"], symbol=symbol,
-                      error=str(rearm_exc))
+                             "restante — tentando liquidar o restante a "
+                             "mercado antes de desistir: %s",
+                             kind, symbol, rearm_exc)
+                # Mesmo fallback do outro ponto de re-arm desta função (achado
+                # da auditoria de 27/07/2026): `remaining` já é a sobra real
+                # (size pedido - sold confirmado pela própria ordem), não uma
+                # nova leitura de saldo — não reconsulta fetch_free_base aqui
+                # de propósito (mesma razão já documentada acima, pra não
+                # confundir a sobra com saldo alheio na mesma moeda-base).
+                liquidated = self._emergency_liquidate(
+                    symbol, remaining, kind, prior_error=str(rearm_exc))
+                if not liquidated:
+                    audit(ev["rearm_failed"], symbol=symbol,
+                          error=str(rearm_exc))
                 return
             # Persistência FORA do try do re-arm (achado da revisão de
             # 20/07): com o stop do restante JÁ armado, uma falha só de I/O
@@ -950,11 +1077,76 @@ class Engine:
                 except Exception:  # noqa: BLE001
                     pass
 
+    def _emergency_liquidate(self, symbol: str, size: float, kind: str,
+                             prior_error: str) -> bool:
+        """Última tentativa antes de desistir de proteger uma posição spot
+        (achado da auditoria de 27/07/2026, transição pra mainnet).
+
+        Os dois pontos de re-arm de `_execute_spot_exit` chamam
+        `set_stop_loss` — que em spot cria uma ordem condicional (categoria
+        `tpslOrder`), a MESMA categoria que o incidente de 27/07 confirma
+        sujeita a bloqueio de compliance da Bybit (retCode 10024,
+        KYC_PROMPT_TOAST) no rearme do trailing. Uma venda a MERCADO comum
+        (sem `stopLossPrice`) não passa por essa categoria — mesma filosofia
+        já usada no fechamento de emergência da ENTRADA (executor.py): não
+        consegue proteger -> elimina o risco fechando de vez, em vez de só
+        alertar e deixar a posição exposta até o próximo ciclo.
+
+        Deliberadamente NÃO mexe em `state/spot_protections.json` nem audita
+        `trade_closed` aqui — o próximo ciclo de `_check_spot_exits` vê o
+        símbolo sumir de `_open_symbols` (a venda é real) e reconcilia via
+        `_handle_spot_position_closed`, reaproveitando a mesma lógica já
+        testada de confirmação/pnl aproximado em vez de duplicá-la.
+
+        Devolve True se a venda foi aceita pela exchange (risco eliminado,
+        ainda que sem confirmação de preço aqui); False se também falhou —
+        aí sim é `naked_position_close_failed` de verdade, intervenção
+        manual imediata."""
+        try:
+            liq_size = self.client.amount_to_precision(symbol, size)
+        except Exception:  # noqa: BLE001
+            liq_size = size
+        if liq_size <= 0:
+            log.critical("Liquidação de emergência de %s (%s) impossível — "
+                         "saldo lido como zero/insuficiente (%.8f). POSIÇÃO "
+                         "PODE ESTAR SEM PROTEÇÃO NENHUMA, intervir "
+                         "manualmente: %s", symbol, kind, size, prior_error)
+            audit("naked_position_close_failed", symbol=symbol, side="long",
+                  size=size, stop_error=prior_error,
+                  close_error="saldo zero/insuficiente para liquidar")
+            return False
+        try:
+            self.client.create_order(symbol, "sell", liq_size, order_type="market")
+        except Exception as close_exc:  # noqa: BLE001
+            log.critical("LIQUIDAÇÃO DE EMERGÊNCIA TAMBÉM FALHOU em %s — "
+                         "POSIÇÃO NUA NA EXCHANGE, intervir manualmente: %s",
+                         symbol, close_exc)
+            audit("naked_position_close_failed", symbol=symbol, side="long",
+                  size=liq_size, stop_error=prior_error,
+                  close_error=str(close_exc))
+            return False
+        log.warning("Liquidação de emergência de %s (%s) bem-sucedida após "
+                   "falha no stop — posição fechada a mercado (%.8f)",
+                   symbol, kind, liq_size)
+        audit("naked_position_close", symbol=symbol, side="long",
+              size=liq_size, error=prior_error)
+        return True
+
     def _apply_control_signal(self) -> None:
         """Lê sinais de controle deixados pelo MCP (state/control.json) e age.
 
         Mantém o MCP desacoplado do processo do engine: o MCP só grava o pedido;
-        o engine decide. Halt trava novas entradas; reset (deliberado) retoma."""
+        o engine decide. Halt trava novas entradas; reset (deliberado) retoma.
+
+        Confere o campo "environment" gravado pelo MCP contra o ambiente REAL
+        deste processo (achado de auditoria, lente "isolamento_estado",
+        27/07/2026): sem isto, um pedido feito com o MCP apontando pra testnet
+        podia ficar parado no arquivo e ser aplicado cegamente por um engine já
+        reiniciado em mainnet (ou vice-versa) — sem qualquer registro de para
+        qual ambiente o pedido era. Sinal de ambiente DIFERENTE do atual é
+        descartado (nunca aplicado) e a auditoria registra o descarte. Sinal
+        sem o campo (escrito antes deste fix) é aplicado como sempre foi —
+        comportamento antigo preservado para não quebrar um sinal já em voo."""
         import json
         from pathlib import Path
 
@@ -964,6 +1156,24 @@ class Engine:
         try:
             data = json.loads(ctrl.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
+            return
+        signal_env = data.get("environment")
+        if signal_env is not None and signal_env != get_environment():
+            log.warning(
+                "Sinal de controle (%s) ignorado: escrito para ambiente '%s', "
+                "processo atual é '%s' — descartado sem aplicar.",
+                data.get("action"), signal_env, get_environment(),
+            )
+            try:
+                audit("control_signal_environment_mismatch",
+                      action=data.get("action"), signal_environment=signal_env,
+                      current_environment=get_environment())
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                ctrl.unlink()
+            except OSError:
+                pass
             return
         action = data.get("action")
         if action == "halt" and not self.risk.halted:

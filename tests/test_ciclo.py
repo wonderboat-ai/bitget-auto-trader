@@ -62,6 +62,14 @@ def _restaura_estado() -> None:
 
 
 atexit.register(_restaura_estado)
+# Zera pra um baseline limpo ANTES dos testes rodarem (27/07/2026, mesmo
+# motivo do fix espelhado em test_smoke.py): os Fakes deste arquivo (ex.
+# FakeSaudavel) não implementam fetch_order, então uma proteção real
+# persistida (posição real de mainnet/testnet) faria _check_spot_exits()
+# tentar reconciliá-la como "fechada externamente" e travar/poluir os testes
+# de exclusividade por símbolo, que não têm relação com proteção de posição.
+# Restaurado ao final como sempre.
+_STATE_FILE.write_text("{}", encoding="utf-8")
 
 # ---------- guarda: state/kill_switch_state.json ----------
 # Desde 21/07/2026, todo RiskManager() novo LÊ e GRAVA este arquivo na
@@ -141,7 +149,13 @@ class FakeSaudavel:
         return []
 
     def fetch_funding_rate(self, symbol):
-        return -0.005
+        # 0.001: seguro contra os DOIS clamps (max_abs_funding_rate mainnet
+        # 0.003 e o testnet, mais frouxo, 0.01) — 27/07/2026, achado da
+        # transição pra mainnet: -0.005 passava só no clamp testnet, então
+        # rodar a suíte com ENVIRONMENT=mainnet no .env vetava toda entrada
+        # destes testes por "Funding anômalo", sem relação com o que este
+        # arquivo realmente testa (exclusividade por símbolo/ciclo).
+        return 0.001
 
     def fetch_ohlcv(self, symbol, timeframe, limit=200):
         return make_candles().values.tolist()

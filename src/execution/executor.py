@@ -154,6 +154,19 @@ class Executor:
         # tinha um furo: confiava cegamente na 1ª leitura). Perp não sofre
         # desse atraso (sem esse conceito de saldo-base) — mantém 1 tentativa,
         # comportamento idêntico ao de sempre.
+        # Nota (27/07, achado durante a transição pra mainnet): este retry
+        # trata QUALQUER exceção de set_stop_loss como se fosse a race de
+        # saldo acima — mas a partir de 13:59 UTC de hoje a Bybit passou a
+        # bloquear a criação de condicional (stopLossPrice/tpslOrder) em spot
+        # por compliance (retCode 10024/KYC_PROMPT_TOAST, mesmo código já
+        # visto no rearm do trailing — ver CLAUDE.md). Se for essa a causa,
+        # a reconfirmação de saldo é inócua e a 2ª tentativa falha pelo MESMO
+        # motivo (determinístico, não uma race) — sem gap de proteção real,
+        # já que o fechamento de emergência abaixo usa ordem a MERCADO
+        # simples (sem stopLossPrice/tpslOrder), não afetada por esse
+        # bloqueio. Não corrigido (nenhum comportamento muda) — só
+        # documentado aqui e no log de retry abaixo pra não confundir quem
+        # diagnosticar um caso assim ao vivo.
         max_attempts = 2 if self.market_type == "spot" else 1
         stop = None
         last_exc: Exception | None = None
@@ -170,7 +183,12 @@ class Executor:
                 last_exc = exc
                 if attempt + 1 < max_attempts:
                     log.warning("Stop falhou em %s (%s) — reconfirmando saldo "
-                                "antes de declarar sem proteção", signal.symbol, exc)
+                                "antes de declarar sem proteção (nota: isto "
+                                "assume causa de saldo atrasado/racy — se o "
+                                "erro persistir IDÊNTICO na 2ª tentativa, pode "
+                                "ser bloqueio de compliance da exchange, não "
+                                "race de saldo; ver comentário acima)",
+                                signal.symbol, exc)
                     protect_size = self.client.amount_to_precision(
                         signal.symbol, _read_protect_size())
 

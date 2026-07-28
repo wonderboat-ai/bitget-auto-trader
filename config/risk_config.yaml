@@ -31,7 +31,13 @@ per_trade:
   # ao vivo: ~84% numa entrada só). Quando o size pelo risco excederia este
   # teto, o RiskManager REDUZ o tamanho pra caber (nunca aumenta risco, só
   # diminui) — a entrada acontece, só menor, deixando caixa pra outros trades.
-  max_notional_pct_equity: 20.0
+  # ELEVADO de 20.0 para 100.0 em 27/07/2026, decisão do Lucas: com equity
+  # real de ~10 USDT (início do teste em mainnet), 20% (~2 USDT) cortava o
+  # nocional abaixo do mínimo de ordem da Bybit spot (~5 USDT), impedindo
+  # qualquer entrada na prática. Com capital tão pequeno o teto de 20% não
+  # protege nada (não há concentração excessiva possível); reavaliar se o
+  # capital crescer o suficiente pra o teto voltar a fazer sentido.
+  max_notional_pct_equity: 100.0
 
 portfolio:
   # Nº máximo de posições abertas simultâneas.

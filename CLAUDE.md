@@ -1,12 +1,109 @@
-# CLAUDE.md — Bybit Auto Trader (handoff 2026-07-26, ~19:5x UTC)
+# CLAUDE.md — Bybit Auto Trader (handoff 2026-07-27, ~dia da virada pra MAINNET)
 
 Contexto vivo do projeto para agentes (Claude Code/Cowork). Fonte completa de
 regras: `INSTRUCOES-PROJETO-v2.md` v2 + `RASCUNHO-instrucoes-v8-colar-manualmente.md`
-(v8, 26/07 — atualiza fatos, não regra; ver seção "Status atual" lá; ainda NÃO
-colada nas instruções do Claude Project — substitui a v7, colada em 22/07).
-Guia operacional humano: `PASSO-A-PASSO.md` (bootstrapping — todas as etapas
-fechadas, ver seu próprio aviso de topo). Idioma de trabalho: português do
-Brasil. Comentários de código explicam causa raiz.
+(v8, atualizado em 27/07 — ver "Status atual" lá; ainda NÃO colada nas
+instruções do Claude Project — substitui a v7, colada em 22/07). Guia
+operacional humano: `PASSO-A-PASSO.md` (bootstrapping testnet — todas as
+etapas fechadas, ver seu próprio aviso de topo). Idioma de trabalho:
+português do Brasil. Comentários de código explicam causa raiz.
+
+**27/07/2026 — O DIA DA TRANSIÇÃO DE TESTNET PARA MAINNET.** A pedido
+explícito do Lucas ("vamos rodar na mainnet", chave de API de mainnet
+gerada e preenchida por ele mesmo, autorização confirmada passo a passo),
+o projeto operou pela primeira vez contra a conta REAL da Bybit (spot,
+equity ~24 USDT — bem menor que a testnet, então o teto de capital por
+trade em `config/risk_config.yaml` foi elevado de 20% para 100% do equity
+na mesma sessão, decisão aprovada do Lucas, ver comentário no próprio YAML).
+Confirmado funcionando: leitura de saldo real, um ciclo `--once` dry-run
+que aprovaria uma entrada real em BTC/USDT. **Nenhuma ordem real foi
+executada ainda** — o motor `--live` contínuo em mainnet é decisão que o
+Lucas precisa disparar pessoalmente (regra de segurança do agente: nunca
+inicio `--live` sozinho, é "executar operação financeira").
+
+**Arquivamento da era testnet**: às 23:13:26 UTC, `logs/audit.jsonl` foi
+zerado pra começar o PnL da mainnet do zero — as 35.479 linhas da era
+testnet (19/07 a 27/07, ~8 dias corridos com pausas manuais, PnL fictício
+final +90,37 USDT bruto sobre 39 trade_closed, 33,3% win rate) foram
+preservadas em `Historico-Testnet-2026-07-27/audit-testnet-completo.jsonl`
+(~6,4MB) + resumo em `Historico-Testnet-2026-07-27/RESULTADO-FINAL-TESTNET.md`.
+**Nenhuma ferramenta MCP (`trader_realized_pnl` etc.) lê o arquivo
+arquivado automaticamente** — qualquer pedido de "histórico/PnL completo
+desde o início" precisa incluir esse arquivo explicitamente.
+
+**Dois incidentes operacionais do próprio dia, ambos achados e corrigidos
+na mesma sessão — lição pra qualquer auditoria/sessão multi-agente
+futura neste projeto:**
+1. **`.env` foi revertido pra `ENVIRONMENT=testnet` sozinho**, no meio da
+   auditoria completa descrita abaixo — um dos agentes do workflow, ao
+   investigar esse exato achado (ver bug #39), aparentemente reverteu a
+   linha sem querer. Achado e corrigido de volta pra `mainnet` na mesma
+   sessão (chaves de API não foram afetadas).
+2. **Múltiplos agentes da mesma auditoria rodaram `tests/test_smoke.py`/
+   `test_ciclo.py` CONCORRENTEMENTE contra os arquivos reais** —
+   `logs/audit.jsonl`, `state/cooldown_state.json` e
+   `state/spot_protections.json`. O backup/restauração desses testes
+   (`atexit`, sobrescreve o arquivo inteiro) foi desenhado pra execução
+   SERIAL, não concorrente: cada restauração sobrescrevia por cima do que
+   a OUTRA sessão tinha acabado de escrever, deixando `logs/audit.jsonl`
+   com eventos fabricados de teste (`llm_signal`/`signal_vetoed` sintéticos)
+   no lugar do evento real de arquivamento, `state/cooldown_state.json` com
+   símbolos de teste fantasma (`ZERO/USDT`, `NOENTRY/USDT`, `DOT/USDT` com
+   cooldown ativo até o dia seguinte) e `state/spot_protections.json`
+   zerado (perdeu o rastreio das 2 posições reais de testnet ainda abertas
+   na conta). **Tudo restaurado manualmente pro estado correto** (o evento
+   `audit_maintenance` original foi reconstituído com o texto/timestamp
+   exatos; os dois arquivos de estado voltaram ao conteúdo real de antes).
+   **Lição registrada para o futuro**: nunca deixar duas lentes/agentes de
+   um mesmo workflow rodarem a suíte de testes ao mesmo tempo contra os
+   arquivos reais — isolar por `AUDIT_PATH`/rodar serializado, mesmo que o
+   objetivo de cada uma seja só validar uma correção pontual.
+
+**Auditoria completa (pente-fino) rodada antes de considerar o dia
+"fechado"**, a pedido do Lucas — workflow de 24 agentes (5 lentes de
+revisão + verificação cética por achado + suíte de testes), 18 achados
+únicos, 17 confirmados como reais. Resumo (detalhe completo nos bugs #33
+a #41 abaixo):
+- **7 bugs corrigidos diretamente pelo workflow** (pequenos, seguros,
+  mesmo padrão "achado→confirmado→corrigido" de sempre): guarda de
+  ambiente no canal MCP→engine (`control.json`), campo `environment` em
+  todo evento auditado + breakdown por ambiente no `trader_realized_pnl`,
+  rearm de stop mudo corrigido (agora sempre audita), mesma classe do bug
+  #29 replicada e corrigida no caminho de SAÍDA (só existia na entrada),
+  confirmação de fill=0 explícito na venda a mercado, `kill_switch_state.py`/
+  `cooldown_state.py` não derrubam mais o boot por falha transitória de
+  I/O, teste do teto de capital corrigido pro valor novo (100%).
+- **4 achados exigiam decisão do Lucas** (não corrigidos pelo workflow,
+  só documentados) — todos decididos e fechados na sequência, na mesma
+  sessão: (1) `SPOT_DUST_USDT=10.0` colide com equity pequeno — Lucas vai
+  resolver **aumentando o capital**, sem mudança de código; (2)
+  `kill_switch_state.json`/`cooldown_state.json` não eram isolados por
+  AMBIENTE (testnet e mainnet liam/gravavam o mesmo arquivo) — **corrigido**
+  (bug #39); (3) rearm de stop em `_execute_spot_exit` sem fallback de
+  liquidação de emergência — **corrigido** (bug #40); (4)
+  `_update_trailing_stop` reconciliava posição como fechada sem confirmar
+  se o stop real ainda estava ativo — **corrigido com aprovação explícita
+  do Lucas** (bug #41, mexe na função do incidente de compliance abaixo,
+  só depois de confirmação direta dele).
+- Suíte final: **257/246 smoke + 8/8 ciclo = 265/265**, confirmado por mim
+  de forma reproduzível (achei e corrigi 2 bugs de TESTE que só apareciam
+  rodando com `.env` em mainnet pela primeira vez — ver bugs #44/#45).
+
+**Incidente de compliance em aberto, NÃO resolvido (decisão deliberada do
+Lucas de não mexer no código/config por enquanto)**: desde as 13:59 UTC de
+hoje, a Bybit começou a bloquear o REARME do trailing stop em spot
+(cancelar+recriar ordem condicional `tpslOrder`) com `retCode 10024`/
+`KYC_PROMPT_TOAST` — o mesmo código historicamente associado a bloqueio de
+DERIVATIVOS pra conta BR, agora aparentemente também atingindo ordem
+condicional em SPOT. `trailing: true` continua ligado em
+`config/risk_config.yaml`; o Lucas decidiu explicitamente "não mexer no
+código, só limpar a falha" quando perguntado se quer desligar. Os bugs
+#40/#41 tornam a RECONCILIAÇÃO em torno desse bloqueio mais segura (nunca
+mais fabrica um `trade_closed` falso, e tenta liquidar a mercado antes de
+desistir de proteger) — mas não resolvem o bloqueio em si. Se isso
+persistir, qualquer posição real com trailing ativo pode precisar de
+acompanhamento manual quando o preço se mover a favor o suficiente pra
+tentar mover o stop.
 
 **Novo (25-26/07): cooldown por símbolo ENDURECIDO pra 3 níveis + reset manual —
 já mesclado em `main`.** A pedido do Lucas ("ele tomou um stop e entrou de novo
@@ -382,10 +479,22 @@ estado não basta, o `RiskManager` também audita na trilha.
 2. A camada de risco (`src/risk/risk_manager.py` + `config/risk_config.yaml`) tem
    veto absoluto. Limites NÃO são negociáveis em runtime e mudança de parâmetro de
    risco exige aprovação humana explícita — nunca mude o YAML por conta própria.
-3. Fases sequenciais: só se avança quando a anterior fechou. Hoje: Fase 1 em
-   fechamento. Mainnet (Fase 5) bloqueada por pendência regulatória.
-4. Testnet por padrão (`ENVIRONMENT=testnet` no `.env`). DRY_RUN por padrão
-   (`--live` desativa). NUNCA preencher chaves de mainnet sem decisão do Lucas.
+3. Fases sequenciais: só se avança quando a anterior fechou. **Atualizado
+   27/07/2026**: a pendência regulatória de derivativos (perp) para conta BR
+   segue de pé — perpétuos continuam bloqueados. Mas SPOT deixou de ser
+   bloqueado: o Lucas decidiu explicitamente migrar da testnet pra mainnet
+   SPOT em 27/07/2026 (ver "Novo (27/07)" no topo deste arquivo) — o motor
+   já rodou (dry-run/`--once`) contra a conta real, com chave de API de
+   mainnet válida. Fase 5 (mainnet) NÃO está mais bloqueada para spot;
+   segue bloqueada para perp/derivativos.
+4. Testnet por padrão continua sendo a regra de CÓDIGO (`ENVIRONMENT=testnet`
+   é o default de `config/settings.py` se a variável não estiver setada) —
+   mas o `.env` REAL desta máquina está deliberadamente em
+   `ENVIRONMENT=mainnet` desde 27/07/2026, decisão explícita do Lucas. DRY_RUN
+   por padrão (`--live` desativa). NUNCA preencher/trocar chaves de mainnet
+   sem decisão do Lucas — a troca de 27/07 foi feita por mim SÓ depois dele
+   pedir explicitamente ("pode trocar você mesmo") após ele mesmo ter
+   preenchido as chaves.
 
 ## Estado exato — 22/07 ~20:20 UTC (verificação adversarial donchian/4h — fio ENCERRADO)
 
@@ -1559,6 +1668,144 @@ confirmação explícita ao Lucas de que ele não vai religar durante a
 janela da suíte, ou aceitar o risco residual pequeno e sempre reconferir
 a trilha depois (como fiz aqui).
 
+## Bugs corrigidos em 27/07 (não reintroduzir)
+
+Achados pela auditoria completa (pente-fino) rodada na transição pra
+mainnet — 24 agentes, 5 lentes + verificação cética por achado. Ver "27/07
+— O DIA DA TRANSIÇÃO" no topo do arquivo pro contexto completo. Os 4
+últimos (#39-#41, #44-#45) foram decididos/corrigidos por mim DEPOIS do
+workflow, não pelo workflow em si (o workflow só documentou, sem aplicar,
+por exigirem decisão do Lucas ou terem sido achados só depois).
+
+33. `mcp_server.py`/`src/engine.py`: sinal de controle (`state/control.json`,
+    canal MCP→engine pra halt/reset/reset_cooldown) não tinha isolamento
+    nem rótulo de ambiente — um pedido feito com o MCP apontando pra
+    testnet podia ficar parado no arquivo e ser aplicado cegamente por um
+    engine já reiniciado em mainnet (ou vice-versa), sem nenhum registro de
+    pra qual ambiente o pedido era. Achado plausível dado que processos
+    `mcp_server.py` órfãos (não recarregam `.env`) já são um padrão
+    documentado neste projeto. Corrigido: `_write_control_signal` agora
+    grava `environment` no payload; `_apply_control_signal` descarta
+    (audita `control_signal_environment_mismatch`) qualquer sinal cujo
+    ambiente gravado DIVIRJA do ambiente real do processo atual. Sinal sem
+    o campo (legado) continua sendo aplicado como sempre.
+34. `src/logger.py`/`src/supervision/state_reader.py`: nenhum evento
+    auditado (exceto `engine_start`) carregava um campo `environment` —
+    se `logs/audit.jsonl` algum dia voltasse a acumular eventos de dois
+    ambientes (exatamente o que aconteceu horas depois, ver incidente de
+    contaminação concorrente no topo do arquivo), `trader_realized_pnl`/
+    `trader_recent_decisions` (MCP) misturariam os dois sem aviso nenhum.
+    Corrigido, aditivo (não muda nenhum valor já consumido): `audit()`
+    grava `environment` em todo evento; `realized_pnl()` ganhou um campo
+    novo `environments` (contagem de `trade_closed` por ambiente) sem
+    filtrar/alterar os totais agregados existentes.
+35. `src/engine.py` (`_execute_spot_exit`): quando a leitura de saldo pro
+    rearm do stop antigo vinha zerada/insuficiente SEM lançar exceção
+    (`rearm_size <= 0`), a função caía num `return` mudo — nem `log.critical`
+    nem evento de auditoria. Quem monitora a trilha (inclusive o
+    `trader-watchdog`) não teria NENHUM evento pra reagir a uma posição
+    potencialmente sem proteção. Corrigido: adicionado o `else` que
+    faltava, auditando o mesmo evento crítico (`*_rearm_stop_failed`) já
+    usado no ramo de exceção vizinho.
+36. `src/engine.py` (`_execute_spot_exit`): a leitura de saldo logo após o
+    `cancel_all()` (pra saber quanto vender) era ÚNICA — se viesse
+    atrasada/racy (mesma classe do bug #29, 21/07, lá era a leitura
+    PÓS-COMPRA, aqui é a PÓS-CANCELAMENTO), o código confundia "posição
+    ainda aberta, leitura atrasada" com "fechamento concorrente
+    confirmado", fabricava um `trade_closed` e apagava o rastreio de uma
+    posição real e agora desprotegida. Corrigido: reconfirma a leitura
+    UMA vez (mesmo padrão do bug #29) antes de diagnosticar via `stop_id`.
+37. `src/engine.py` (`_execute_spot_exit`): `filled` vindo `0` EXPLÍCITO
+    (diferente de ausente/`None`, que já tinha fallback seguro) na resposta
+    da venda a mercado fazia `sold=0.0` e o bloco de "fill parcial" tentava
+    re-armar um stop pro tamanho INTEIRO de uma posição já vendida —
+    disparando um alarme crítico FALSO de "posição sem proteção" pra uma
+    venda que teve sucesso (mesma classe de resposta incompleta do ccxt já
+    documentada nos bugs #17/#19/#25, nunca tratada neste caminho de
+    saída). Corrigido: reconfirma via `fetch_order` (mesma técnica já usada
+    em `executor.py`) antes de aceitar um `0` explícito como venda zerada.
+38. `src/risk/kill_switch_state.py`/`cooldown_state.py`: `save()` não tinha
+    nenhum try/except — uma falha transitória de I/O (lock do OneDrive, já
+    visto neste projeto, inclusive nestes MESMOS arquivos, bugs #31/#32)
+    propagava sem barreira, derrubando `RiskManager.__init__` e o `Engine`
+    inteiro — inclusive tentativas de restart do `supervisor.py`, podendo
+    esgotar as 5 tentativas/30min e virar `engine_supervisor_giveup` por
+    causa de um obstáculo de I/O passageiro, não um problema real. Corrigido:
+    `save()` nos dois arquivos agora captura `OSError` e loga aviso, mesmo
+    padrão já usado pelas funções `load()` irmãs.
+39. `src/risk/kill_switch_state.py`/`cooldown_state.py`: **testnet e mainnet
+    liam/gravavam o MESMO arquivo de estado** — `_resolve_state_path()` só
+    isolava backtest/pesquisa do motor ao vivo (override por env var,
+    bug #32), nunca testnet de mainnet. Achado ao vivo: `cooldown_state.json`
+    tinha `ETH/USDT` com `triggers_date` de HOJE (atividade de testnet),
+    que faria um stop real em mainnet ser tratado como o 2º acionamento do
+    dia (60min) em vez do 1º (30min) — enviesando pro lado mais cauteloso,
+    mas ainda um bug real de contabilidade. Corrigido (decisão do Lucas,
+    "ok" — ver pergunta feita a ele): `_resolve_state_path()` agora também
+    consulta `ENVIRONMENT` quando não há override explícito — mainnet
+    mantém o nome canônico de sempre (`kill_switch_state.json`/
+    `cooldown_state.json`); testnet ganha arquivo dedicado
+    (`kill_switch_state-testnet.json`/`cooldown_state-testnet.json`). Dados
+    de testnet existentes MIGRADOS pro arquivo novo (não perdidos); os
+    arquivos canônicos (mainnet) resetados limpos. 2 testes novos
+    (`test_smoke.py`) provam a resolução correta nos dois ramos.
+40. `src/engine.py` (`_execute_spot_exit`): os dois pontos de re-arm do
+    stop (após venda falhar; após preenchimento parcial) chamam
+    `set_stop_loss` — a MESMA chamada condicional (`tpslOrder` em spot) que
+    o incidente de compliance de hoje (ver topo do arquivo) confirma sujeita
+    a bloqueio da Bybit. Diferente da ENTRADA (`executor.py`), que quando o
+    stop falha fecha a posição a MERCADO (ordem comum, imune ao bloqueio),
+    estes dois pontos não tinham fallback nenhum — só alertavam e deixavam
+    a posição exposta. Corrigido (decisão do Lucas, "reatm de stop" —
+    aprovado): novo método `_emergency_liquidate()` — última tentativa
+    antes de desistir, vende a mercado (sem `stopLossPrice`, não passa pela
+    categoria bloqueada); se aceita, audita `naked_position_close` (o
+    próximo ciclo reconcilia via `_handle_spot_position_closed`, sem
+    duplicar lógica de PnL aqui); se também falhar,
+    `naked_position_close_failed` + o alerta crítico de sempre. 4 testes
+    novos (sucesso e falha da liquidação, nos dois pontos de rearm).
+41. `src/engine.py` (`_update_trailing_stop`): quando o saldo base vinha
+    zerado após `cancel_all()` (`rearm_size <= 0`), o código SEMPRE assumia
+    fechamento concorrente pelo stop e reconciliava — sem confirmar se o
+    stop real ainda estava ativo (o fix #27 de 21/07, que faz exatamente
+    essa confirmação, nunca tinha sido propagado deste caminho irmão, só
+    existia em `_execute_spot_exit`). Se o `cancel_all()` tivesse falhado
+    silenciosamente (rede), o código fabricaria um `trade_closed` falso pra
+    uma posição real e protegida. Corrigido (decisão do Lucas, aprovação
+    explícita depois de eu explicar o que a correção faz e não faz — NÃO
+    resolve o bloqueio de compliance em si, só corrige o diagnóstico):
+    mesma confirmação via `fetch_order(stop_id)` do fix #27, agora também
+    aqui. Novo evento `trailing_move_stop_still_active` quando a
+    reconciliação é abortada por falta de confirmação. 3 testes novos
+    (saldo zero + stop ainda ativo → mantém proteção; saldo zero + stop
+    confirmadamente fechado → reconcilia normal, provando que a correção
+    não quebrou o caminho de fechamento genuíno).
+42-43. (números pulados de propósito — os dois incidentes operacionais do
+    dia, .env revertido e contaminação por testes concorrentes, não são
+    bugs de CÓDIGO; documentados em prosa no topo do arquivo, não aqui.)
+44. `tests/test_smoke.py`/`test_ciclo.py`: o fake de exchange usado nos
+    testes de exclusividade por símbolo (`FakeSaudavel` e equivalentes)
+    devolvia `fetch_funding_rate = -0.005` fixo — valor que só passa no
+    clamp FROUXO da testnet (`max_abs_funding_rate_testnet: 0.01`), nunca
+    testado contra o clamp apertado de mainnet (`max_abs_funding_rate:
+    0.003`) porque `.env` sempre esteve em testnet durante o
+    desenvolvimento. Rodar a suíte pela primeira vez com `.env=mainnet`
+    (27/07) vetava toda entrada destes testes por "Funding anômalo", sem
+    relação nenhuma com o que a seção realmente testa. Corrigido: valor
+    fixo trocado pra `0.001`, seguro nos dois clamps.
+45. `tests/test_smoke.py`/`test_ciclo.py`: o guard de
+    `state/spot_protections.json` (backup no import + restauração via
+    `atexit`) nunca LIMPAVA o arquivo antes de rodar os testes — só
+    garantia restaurar o conteúdo real no final. Com proteções reais
+    persistidas (posições reais de swing, ETH/BTC), qualquer `Engine()`
+    instanciado por um teste cujo fake não implementa `fetch_order`
+    (`FakeSaudavel`) herdava essas entradas e travava tentando reconciliá-las
+    como "fechadas externamente" — contaminando testes de exclusividade por
+    símbolo que nada têm a ver com proteção de posição. Corrigido: os dois
+    arquivos agora zeram `state/spot_protections.json` pra `{}` logo após o
+    backup, ANTES de qualquer teste rodar (restaurado ao final como
+    sempre).
+
 ## Estado exato — 21/07 ~21:25 UTC (investigação do whipsaw ETH + cooldown)
 
 A pedido do Lucas ("vamos resolver essa pendência" + "configurar o watchdog
@@ -2081,11 +2328,24 @@ Avisos ao analisar: o arquivo tem 14 eventos órfãos pré-13:16 de 15/07 (runs
 `--once` avulsos; incluem o antigo bug long+short às 12:46, pré-fix #7), 2
 ciclos órfãos entre as sessões 13:16 e 13:29, e uma sessão engine de 11min
 (17:44–17:55Z de 15/07) SEM engine_stop (teste manual do Lucas, janela fechada
-na marra — confirmado) — ignorar em métricas de sessão. Há 2 eventos
-`audit_maintenance`: (21:35Z de 15/07) documentando a remoção dos ~40k eventos
-simulados de backtest para `audit-backtest-contaminacao-2026-07-15.jsonl`
-(gravados antes do fix #14; nada foi apagado); e (~01:10Z de 22/07,
-madrugada — ver bug #31/#32) documentando a remoção de 2 linhas de teste
+na marra — confirmado) — ignorar em métricas de sessão. **Atenção
+(27/07/2026): `logs/audit.jsonl` foi ZERADO na transição pra mainnet** (ver
+"27/07 — O DIA DA TRANSIÇÃO" no topo do arquivo) — os eventos abaixo desta
+nota, incluindo os 2 `audit_maintenance` históricos descritos a seguir, NÃO
+estão mais no arquivo real; vivem só em
+`Historico-Testnet-2026-07-27/audit-testnet-completo.jsonl` (histórico
+completo, preservado). O `logs/audit.jsonl` ATUAL tem, na ordem, **2 eventos
+`audit_maintenance` próprios de hoje**: o primeiro documenta o arquivamento
+em si (`archived_testnet_history_for_mainnet_transition`, 35.479 linhas
+movidas); o segundo (`moved_concurrent_test_contamination`) documenta a
+limpeza de uma contaminação por testes concorrentes rodados durante a
+auditoria da mesma sessão (ver topo do arquivo) — ambos preservam o que foi
+movido, nada foi apagado, mesmo padrão de sempre. Histórico anterior a
+27/07, preservado no arquivo de testnet: 2 eventos `audit_maintenance` —
+(21:35Z de 15/07) documentando a remoção dos ~40k eventos simulados de
+backtest para `audit-backtest-contaminacao-2026-07-15.jsonl` (gravados
+antes do fix #14; nada foi apagado); e (~01:10Z de 22/07, madrugada — ver
+bug #31/#32) documentando a remoção de 2 linhas de teste
 (`kill_switch_tripped`/`cooldown_triggered` com texto óbvio de teste) pra
 `audit-teste-contaminacao-2026-07-21.jsonl` — engano de um script de
 verificação manual que esqueceu de isolar `AUDIT_PATH`, autorizado pelo
@@ -2167,8 +2427,22 @@ zera `consecutive_stops`, reset manual (`reset_cooldown`) libera antes do
 prazo e audita `cooldown_reset`, reset sem cooldown ativo é no-op sem
 evento fantasma — suíte final 244/244 smoke** — e
 `tests/test_ciclo.py` (8 checks: exclusividade por símbolo, limites
-intra-ciclo). **Total 252/252**, confirmado com o motor parado antes do
-restart que ligou a feature. Rodar da RAIZ:
+intra-ciclo). **+ 27/07/2026 (bugs #33-#41, #44-#45, dia da transição pra
+mainnet): 13 checks novos** — isolamento de ambiente no sinal de controle
+MCP, campo `environment` em todo evento + breakdown no `realized_pnl`,
+rearm mudo corrigido, race de saldo pós-cancelamento espelhada do bug #29,
+confirmação de fill=0 explícito, `kill_switch_state`/`cooldown_state`
+resolvendo caminho por AMBIENTE (2 checks), liquidação de emergência no
+rearm de `_execute_spot_exit` (4 checks: sucesso/falha nos 2 pontos),
+`_update_trailing_stop` confirmando o stop real antes de reconciliar como
+fechado (3 checks) — **suíte final 257/257 smoke**. `test_ciclo.py` sem
+mudança de contagem (8/8), mas com o mesmo fix de isolamento de
+`spot_protections.json` (zera pra baseline limpo antes de rodar, não só
+restaura no final — bug #45) e do funding rate seguro nos dois clamps
+(bug #44). **Total 265/265**, confirmado por mim de forma reproduzível
+(motor parado, `.env` real em mainnet) depois de descontaminar os efeitos
+colaterais de rodar a auditoria com múltiplos agentes concorrentes (ver
+topo do arquivo). Rodar da RAIZ:
 
 ```powershell
 python tests\test_smoke.py

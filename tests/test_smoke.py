@@ -9,6 +9,7 @@ loop (main.py) parado.
 from __future__ import annotations
 
 import atexit
+import copy
 import json
 import os
 import shutil
@@ -54,6 +55,14 @@ def _restaura_estado() -> None:
 
 
 atexit.register(_restaura_estado)
+# Zera pra um baseline limpo ANTES dos testes rodarem (27/07/2026): o backup
+# acima só garante restaurar o conteúdo real no final — com o motor operando
+# em mainnet e proteções reais persistidas (ex.: posições reais de swing),
+# qualquer Engine() instanciado por um teste sem fake que implemente
+# fetch_order herdaria essas entradas e tentaria reconciliá-las como
+# "fechadas externamente", contaminando testes de exclusividade por símbolo
+# que nada têm a ver com proteção de posição. Restaurado ao final como sempre.
+_STATE_FILE.write_text("{}", encoding="utf-8")
 
 # ---------- guarda: state/kill_switch_state.json ----------
 # Desde 21/07/2026, todo RiskManager() novo LÊ e GRAVA este arquivo na
@@ -142,12 +151,19 @@ ok("sem stop -> veto", not d_ns.approved, d_ns.reason)
 
 # ---------- 3b. teto de capital por trade individual (decisão 17/07) ----------
 # equity 1000, risk_pct 0.5% => risk_usdt=5; stop MUITO apertado (distância 0.1)
-# => size teórico 50 / notional 5000 — bem acima do teto de 20% do equity (200).
+# => size teórico 50 / notional 5000 — bem acima de qualquer teto razoável.
+# Usa uma cópia ISOLADA do cfg com o teto fixado em 20% (não o valor ao vivo
+# de config/risk_config.yaml, que muda com o capital/decisão do Lucas — ver
+# padrão idêntico na seção 14 abaixo) para o teste não quebrar a cada ajuste
+# do YAML (achado 27/07: subiu pra 100.0 na transição pra mainnet, size real
+# virou 10.0 e este teste passou a falhar mesmo com o código correto).
 AUDIT.unlink(missing_ok=True)
+cfg_teto20 = copy.deepcopy(cfg)
+cfg_teto20["per_trade"]["max_notional_pct_equity"] = 20.0
 sig_tight = Signal(symbol="BTC/USDT:USDT", direction=Direction.LONG, conviction=0.8,
                    entry_price=100.0, stop_price=99.9, take_profit=100.3,
                    profile="daytrade", rationale="teste stop apertado")
-d_tight = RiskManager(cfg, environment="testnet").evaluate(sig_tight, state, funding_rate=-0.005, data_age_sec=0)
+d_tight = RiskManager(cfg_teto20, environment="testnet").evaluate(sig_tight, state, funding_rate=-0.005, data_age_sec=0)
 ok("teto por trade: size CLAMPADO a 20% do equity (nunca vetado)",
    d_tight.approved and abs(d_tight.position_size - 2.0) < 1e-9,
    f"size={d_tight.position_size}")
@@ -208,7 +224,13 @@ class FakeEthQuebrado:
         return []
 
     def fetch_funding_rate(self, symbol):
-        return -0.005
+        # 0.001: seguro contra os DOIS clamps (max_abs_funding_rate mainnet
+        # 0.003 e o testnet, mais frouxo, 0.01) — 27/07/2026, achado da
+        # transição pra mainnet: -0.005 passava só no clamp testnet, então
+        # rodar a suíte com ENVIRONMENT=mainnet no .env vetava toda entrada
+        # destes testes por "Funding anômalo", sem relação com o que a seção
+        # realmente testa (exclusividade por símbolo / falha de execução).
+        return 0.001
 
     def fetch_ohlcv(self, symbol, timeframe, limit=200):
         if symbol.startswith("ETH"):
@@ -906,6 +928,58 @@ ok("protecao limpa apos a reconciliacao da corrida", "RACE/USDT" not in protecti
 FakeSpotExit.ORDER_RESPONSES = {}
 engine_mod.BybitClient = FakeSpotExit
 
+# 12m2. cancel_all funciona DE VERDADE (stop realmente cancelado) mas a 1a
+# leitura de fetch_free_base logo depois vem atrasada/racy (saldo ainda nao
+# assentado na exchange) -- achado da revisao adversarial de 27/07/2026,
+# mesma classe do bug #29 (21/07, lado da ENTRADA) so que agora do lado da
+# SAIDA. Antes do fix: como o stop consultado via fetch_order mostra
+# status=canceled (nao open/untriggered -- o cancel_all realmente rodou),
+# o diagnostico antigo concluia "fechamento concorrente pelo stop" e
+# delegava pra _handle_spot_position_closed, fabricando um trade_closed
+# aproximado e limpando a protecao de uma posicao REAL, ainda aberta e
+# agora sem NENHUM stop. Fix: reconfirma fetch_free_base uma vez antes de
+# diagnosticar -- a 2a leitura mostra o saldo real e a venda acontece
+# normalmente, sem fabricar fechamento nenhum.
+class FakeSpotExitSaldoPosCancelRacy(FakeSpotExit):
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self._free_calls = 0
+
+    def fetch_free_base(self, symbol):
+        self._free_calls += 1
+        self.calls.append(("fetch_free_base", symbol))
+        if self._free_calls == 1:
+            return 0.0  # 1a leitura: racy, logo apos o cancel_all
+        return 1.0  # reconfirmacao: saldo real ja assentado
+
+    def create_order(self, symbol, side, amount, order_type="market", price=None, params=None):
+        self.calls.append(("create_order", side, amount))
+        return {"id": "racy-exit-1", "average": FakeSpotExit.PRICE, "filled": amount}
+
+
+AUDIT.unlink(missing_ok=True)
+protection_state.set_protection("RACY/USDT", entry_price=20.0, take_profit=24.0,
+                                stop_price=18.0, size=1.0, stop_id="stop-racy-1")
+FakeSpotExit.ORDER_RESPONSES = {
+    "stop-racy-1": {"id": "stop-racy-1", "status": "canceled", "filled": 0.0,
+                    "average": None, "price": None},
+}
+engine_mod.BybitClient = FakeSpotExitSaldoPosCancelRacy
+eng_racy = engine_mod.Engine(dry_run=False)
+eng_racy._open_symbols = {"RACY/USDT"}
+FakeSpotExit.PRICE = 25.0  # acima do alvo -> deveria fechar por TP de verdade
+eng_racy._check_spot_exits()
+ev_racy = [json.loads(l) for l in AUDIT.read_text(encoding="utf-8").splitlines()]
+tc_racy = [e for e in ev_racy if e["event"] == "trade_closed" and e["symbol"] == "RACY/USDT"]
+vendas_racy = [c for c in eng_racy.client.calls if c[0] == "create_order"]
+ok("saldo pos-cancel_all racy: reconfirma e VENDE de verdade (nao fabrica fechamento concorrente)",
+   len(vendas_racy) == 1 and abs(vendas_racy[0][2] - 1.0) < 1e-9
+   and len(tc_racy) == 1 and tc_racy[0]["reason"] == "take_profit", str(ev_racy))
+ok("saldo pos-cancel_all racy: protecao limpa so DEPOIS da venda real (fluxo normal de TP)",
+   "RACY/USDT" not in protection_state.load())
+FakeSpotExit.ORDER_RESPONSES = {}
+engine_mod.BybitClient = FakeSpotExit
+
 # 12n. fetch_order confirma status=closed e filled>0 mas average/price vêm
 # ambos 0 (dado ausente disfarçado de confirmado — cenário plausível pra
 # ordem a mercado sem preço-limite) -> NÃO aceita como confirmado (achado
@@ -987,6 +1061,81 @@ ok("take_profit_exit_failed auditado",
 ok("stop_id atualizado no arquivo apos re-armar (nao fica apontando pro ID cancelado, 18/07/2026)",
    protection_state.load().get("BTC/USDT", {}).get("stop_id") == "sl-rearm",
    str(protection_state.load().get("BTC/USDT")))
+protection_state.clear_protection("BTC/USDT")
+engine_mod.BybitClient = FakeSpotExit
+
+# 12l/12m. Venda falha E o rearm do stop TAMBÉM falha (achado da auditoria de
+# 27/07/2026: mesma chamada set_stop_loss/tpslOrder que o bloqueio de
+# compliance de hoje confirma sujeita a rejeição) — última tentativa antes
+# de desistir: liquidar a posição a MERCADO (ordem comum, não passa pela
+# categoria bloqueada). 12l: liquidação de emergência SUCEDE.
+
+
+class FakeSpotExitVendaFalhaRearmFalhaLiquidaOk(FakeSpotExit):
+    CREATE_ORDER_CALLS = 0
+
+    def create_order(self, symbol, side, amount, order_type="market", price=None, params=None):
+        self.calls.append(("create_order", side, amount))
+        FakeSpotExitVendaFalhaRearmFalhaLiquidaOk.CREATE_ORDER_CALLS += 1
+        if FakeSpotExitVendaFalhaRearmFalhaLiquidaOk.CREATE_ORDER_CALLS == 1:
+            raise RuntimeError("venda rejeitada (simulado)")
+        # 2ª chamada = a liquidação de emergência dentro do fallback novo.
+        return {"id": "liquidacao-emergencia-1", "average": FakeSpotExit.PRICE,
+                "filled": amount}
+
+    def set_stop_loss(self, symbol, side, amount, stop_price):
+        self.calls.append(("set_stop_loss", side, amount, stop_price))
+        raise RuntimeError("bloqueio de compliance simulado (10024/KYC_PROMPT_TOAST)")
+
+
+AUDIT.unlink(missing_ok=True)
+FakeSpotExitVendaFalhaRearmFalhaLiquidaOk.CREATE_ORDER_CALLS = 0
+protection_state.set_protection("BTC/USDT", entry_price=100.0, take_profit=110.0,
+                                stop_price=95.0, size=0.066047)
+engine_mod.BybitClient = FakeSpotExitVendaFalhaRearmFalhaLiquidaOk
+FakeSpotExit.PRICE = 112.0
+eng_vfl_ok = engine_mod.Engine(dry_run=False)
+eng_vfl_ok._open_symbols = {"BTC/USDT"}
+eng_vfl_ok._check_spot_exits()
+ok("venda falhou e rearm falhou: tentou liquidar a mercado (2ª chamada create_order)",
+   eng_vfl_ok.client.CREATE_ORDER_CALLS == 2, str(eng_vfl_ok.client.calls))
+ev_vfl_ok = [json.loads(l) for l in AUDIT.read_text(encoding="utf-8").splitlines()]
+ok("liquidação de emergência bem-sucedida audita naked_position_close (nao rearm_failed)",
+   any(e["event"] == "naked_position_close" for e in ev_vfl_ok)
+   and not any(e["event"] == "take_profit_rearm_stop_failed" for e in ev_vfl_ok),
+   str([e["event"] for e in ev_vfl_ok]))
+protection_state.clear_protection("BTC/USDT")
+engine_mod.BybitClient = FakeSpotExit
+
+# 12m. Venda falha, rearm falha, E a liquidação de emergência TAMBÉM falha —
+# aí sim é naked_position_close_failed de verdade (intervenção manual).
+
+
+class FakeSpotExitVendaFalhaRearmFalhaLiquidaFalha(FakeSpotExit):
+    def create_order(self, symbol, side, amount, order_type="market", price=None, params=None):
+        self.calls.append(("create_order", side, amount))
+        raise RuntimeError("venda rejeitada (simulado, inclusive a liquidação de emergência)")
+
+    def set_stop_loss(self, symbol, side, amount, stop_price):
+        self.calls.append(("set_stop_loss", side, amount, stop_price))
+        raise RuntimeError("bloqueio de compliance simulado (10024/KYC_PROMPT_TOAST)")
+
+
+AUDIT.unlink(missing_ok=True)
+protection_state.set_protection("BTC/USDT", entry_price=100.0, take_profit=110.0,
+                                stop_price=95.0, size=0.066047)
+engine_mod.BybitClient = FakeSpotExitVendaFalhaRearmFalhaLiquidaFalha
+FakeSpotExit.PRICE = 112.0
+eng_vfl_fail = engine_mod.Engine(dry_run=False)
+eng_vfl_fail._open_symbols = {"BTC/USDT"}
+eng_vfl_fail._check_spot_exits()
+ev_vfl_fail = [json.loads(l) for l in AUDIT.read_text(encoding="utf-8").splitlines()]
+ok("liquidação de emergência TAMBÉM falhou: audita naked_position_close_failed",
+   any(e["event"] == "naked_position_close_failed" for e in ev_vfl_fail),
+   str([e["event"] for e in ev_vfl_fail]))
+ok("liquidação de emergência TAMBÉM falhou: audita take_profit_rearm_stop_failed (alerta do watchdog)",
+   any(e["event"] == "take_profit_rearm_stop_failed" for e in ev_vfl_fail),
+   str([e["event"] for e in ev_vfl_fail]))
 protection_state.clear_protection("BTC/USDT")
 engine_mod.BybitClient = FakeSpotExit
 
@@ -1820,6 +1969,68 @@ ok("saldo zero + stop ativo: protecao MANTIDA (posicao segue viva e rastreada)",
    "BTC/USDT" in protection_state.load())
 protection_state.clear_protection("BTC/USDT")
 
+# 21b2. MESMO cenario de 21b, mas pelo caminho do TRAILING MOVE (nao do TP) —
+# achado/correcao da auditoria de 27/07/2026: fix #27 nunca tinha sido
+# propagado pra _update_trailing_stop. Saldo zero apos cancel_all() com o
+# stop real AINDA ativo (cancel_all provavelmente falhou) NAO pode fabricar
+# trade_closed nem apagar a protecao.
+AUDIT.unlink(missing_ok=True)
+protection_state.set_protection("BTC/USDT", entry_price=100.0, take_profit=None,
+                                stop_price=90.0, size=0.066047, stop_id="sl-tr5",
+                                profile="daytrade", trailing=True,
+                                trail_distance=10.0, peak_price=100.0)
+engine_mod.BybitClient = FakeSpotTrail
+FakeSpotTrail.REAL_STOP_ORDERS = []
+FakeSpotExit.PRICE = 120.0  # pico avanca -> tentaria mover o stop de 90 pra 110
+_free_orig21b2 = FakeSpotExit.FREE_BASE
+FakeSpotExit.FREE_BASE = 0.0  # saldo preso: cancel_all "falhou" em liberar
+# fetch_order default do FakeSpotExit devolve status="open" -> stop AINDA ativo
+eng_tr5 = engine_mod.Engine(dry_run=False)
+eng_tr5._open_symbols = {"BTC/USDT"}
+eng_tr5._check_spot_exits()
+FakeSpotExit.FREE_BASE = _free_orig21b2
+ev21b2 = [json.loads(l) for l in AUDIT.read_text(encoding="utf-8").splitlines()]
+ok("trailing: saldo zero + stop AINDA ativo apos cancel_all -> NAO fabrica trade_closed",
+   not [e for e in ev21b2 if e["event"] == "trade_closed"], str(ev21b2))
+ok("trailing: saldo zero + stop ainda ativo -> audita trailing_move_stop_still_active",
+   len([e for e in ev21b2 if e["event"] == "trailing_move_stop_still_active"]) == 1,
+   str([e["event"] for e in ev21b2]))
+ok("trailing: saldo zero + stop ainda ativo -> protecao MANTIDA (posicao segue rastreada)",
+   "BTC/USDT" in protection_state.load())
+protection_state.clear_protection("BTC/USDT")
+
+# 21b3. Mesmo cenario, mas o stop CONFIRMADAMENTE nao esta mais ativo (fechamento
+# concorrente real) -> continua reconciliando normalmente como antes (a
+# correcao acima NAO pode quebrar o caminho de fechamento genuino).
+
+
+class FakeSpotTrailFechamentoReal(FakeSpotTrail):
+    def fetch_order(self, order_id, symbol):
+        self.calls.append(("fetch_order", order_id, symbol))
+        return {"id": order_id, "status": "closed", "filled": 0.066047,
+                "average": 89.5, "price": 89.5}
+
+
+AUDIT.unlink(missing_ok=True)
+protection_state.set_protection("BTC/USDT", entry_price=100.0, take_profit=None,
+                                stop_price=90.0, size=0.066047, stop_id="sl-tr6",
+                                profile="daytrade", trailing=True,
+                                trail_distance=10.0, peak_price=100.0)
+engine_mod.BybitClient = FakeSpotTrailFechamentoReal
+FakeSpotTrail.REAL_STOP_ORDERS = []
+FakeSpotExit.PRICE = 120.0
+_free_orig21b3 = FakeSpotExit.FREE_BASE
+FakeSpotExit.FREE_BASE = 0.0
+eng_tr6 = engine_mod.Engine(dry_run=False)
+eng_tr6._open_symbols = {"BTC/USDT"}
+eng_tr6._check_spot_exits()
+FakeSpotExit.FREE_BASE = _free_orig21b3
+ev21b3 = [json.loads(l) for l in AUDIT.read_text(encoding="utf-8").splitlines()]
+ok("trailing: stop CONFIRMADAMENTE fechado -> reconcilia normalmente (trade_closed real)",
+   len([e for e in ev21b3 if e["event"] == "trade_closed"]) == 1, str(ev21b3))
+ok("trailing: stop confirmado fechado -> protecao limpa",
+   "BTC/USDT" not in protection_state.load())
+
 # 21c. trailing exit-now: preco ja rompeu o nivel trailed -> vende a mercado
 AUDIT.unlink(missing_ok=True)
 protection_state.set_protection("BTC/USDT", entry_price=100.0, take_profit=None,
@@ -2167,6 +2378,29 @@ ok("kill_switch_state.STATE_PATH: sem override, aponta pro arquivo real (comport
    kill_switch_state.STATE_PATH == ROOT / "state" / "kill_switch_state.json")
 ok("cooldown_state.STATE_PATH: sem override, aponta pro arquivo real (comportamento de sempre)",
    cooldown_state.STATE_PATH == ROOT / "state" / "cooldown_state.json")
+
+# 22f/23m. Isolamento por AMBIENTE (achado da auditoria de 27/07/2026,
+# transição pra mainnet): sem override, o nome também depende de
+# ENVIRONMENT -- mainnet mantém o canônico (testado acima, já bate porque
+# .env real desta sessão está em mainnet); testnet ganha um arquivo
+# dedicado. STATE_PATH é resolvido uma vez no import do módulo, então para
+# testar o outro ramo chamamos _resolve_state_path() direto, sem mexer no
+# STATE_PATH já cacheado (usado por todos os testes 22/23 acima e abaixo).
+_env_antes = os.environ.get("ENVIRONMENT")
+os.environ["ENVIRONMENT"] = "testnet"
+try:
+    ok("kill_switch_state: em testnet, sem override, usa arquivo DEDICADO (nao o canonico de mainnet)",
+       kill_switch_state._resolve_state_path() == ROOT / "state" / "kill_switch_state-testnet.json")
+    ok("cooldown_state: em testnet, sem override, usa arquivo DEDICADO (nao o canonico de mainnet)",
+       cooldown_state._resolve_state_path() == ROOT / "state" / "cooldown_state-testnet.json")
+finally:
+    if _env_antes is None:
+        os.environ.pop("ENVIRONMENT", None)
+    else:
+        os.environ["ENVIRONMENT"] = _env_antes
+# (KILL_SWITCH_STATE_PATH/COOLDOWN_STATE_PATH override vencendo em qualquer
+# ambiente já é coberto pelos testes de isolamento de subprocesso logo
+# abaixo, seção 25 -- não duplicado aqui.)
 
 import subprocess  # noqa: E402
 

@@ -133,17 +133,33 @@ class StateReader:
         reportava 1 trade fechado (-5,81 USDT) quando a trilha tinha 20
         (+233,95 USDT no total). Agora lê o arquivo inteiro (barato — poucos
         milissegundos mesmo com dezenas de milhares de linhas) e só corta
-        DEPOIS de já ter isolado os `trade_closed`."""
+        DEPOIS de já ter isolado os `trade_closed`.
+
+        `environments` no retorno (27/07/2026): contagem de `trade_closed`
+        por valor de `environment` (campo novo em todo evento, ver
+        `src/logger.py:audit()`). Eventos gravados ANTES desse fix não têm
+        o campo — contados como `"desconhecido"`. Puramente informativo,
+        não muda `closed_trades`/`realized_pnl_usdt`/`win_rate_pct` (que
+        seguem somando TODOS os fechamentos, como sempre) — é só o sinal
+        que faltava pra perceber, sem precisar abrir o arquivo bruto, se o
+        total agregado está misturando testnet com mainnet (risco real
+        numa transição de ambiente, se a trilha algum dia voltar a
+        acumular os dois períodos no mesmo arquivo)."""
         events = _read_audit()
         closes = [e for e in events if e.get("event") == "trade_closed"]
         if limit is not None:
             closes = closes[-limit:]
         total = sum(float(e.get("pnl_usdt") or 0) for e in closes)
         wins = [e for e in closes if float(e.get("pnl_usdt") or 0) > 0]
+        environments: dict[str, int] = {}
+        for e in closes:
+            key = e.get("environment") or "desconhecido"
+            environments[key] = environments.get(key, 0) + 1
         return {
             "closed_trades": len(closes),
             "realized_pnl_usdt": round(total, 2),
             "win_rate_pct": round(len(wins) / len(closes) * 100, 1) if closes else 0.0,
+            "environments": environments,
         }
 
     def explain_symbol(self, symbol: str, limit: int = 10) -> list[dict]:

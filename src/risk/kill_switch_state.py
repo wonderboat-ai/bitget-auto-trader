@@ -45,12 +45,25 @@ def _resolve_state_path() -> Path:
     Essa escrita é SILENCIOSA para quem olha a trilha real: o evento
     `kill_switch_tripped` correspondente vai para o AUDIT_PATH isolado do
     backtest (fix #14), nunca para logs/audit.jsonl — nada explicaria por
-    que o motor ao vivo passou a rejeitar entradas."""
+    que o motor ao vivo passou a rejeitar entradas.
+
+    Isolamento por AMBIENTE (achado da auditoria de 27/07/2026, transição
+    pra mainnet): sem override explícito, o nome do arquivo agora também
+    depende de ENVIRONMENT — mainnet mantém o nome canônico de sempre
+    (`kill_switch_state.json`, é o real que importa a partir de hoje);
+    testnet ganha um arquivo próprio (`kill_switch_state-testnet.json`).
+    Antes deste fix, testnet e mainnet liam/gravavam o MESMO arquivo — um
+    halt/reset num ambiente vazava pro outro. Import tardio de
+    `config.settings` (não no topo do módulo) para evitar qualquer risco de
+    import circular; settings.py não importa nada de src.risk."""
     override = os.environ.get("KILL_SWITCH_STATE_PATH")
-    if not override:
-        return ROOT / "state" / "kill_switch_state.json"
-    p = Path(override)
-    return p if p.is_absolute() else ROOT / p
+    if override:
+        p = Path(override)
+        return p if p.is_absolute() else ROOT / p
+    from config.settings import get_environment
+    if get_environment() == "testnet":
+        return ROOT / "state" / "kill_switch_state-testnet.json"
+    return ROOT / "state" / "kill_switch_state.json"
 
 
 STATE_PATH = _resolve_state_path()
@@ -74,8 +87,26 @@ def load() -> dict:
 
 
 def save(halted: bool, reason: str = "") -> None:
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = STATE_PATH.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps({"halted": halted, "reason": reason}, indent=2),
-                   encoding="utf-8")
-    tmp.replace(STATE_PATH)  # atômico no mesmo filesystem, inclusive Windows/NTFS
+    # Falha transitória de I/O (ex.: lock do OneDrive na pasta state/ — já
+    # visto neste projeto, inclusive neste MESMO arquivo, ver CLAUDE.md
+    # bug #31/#32) NUNCA deve propagar. `RiskManager.__init__` chama save()
+    # incondicionalmente a cada boot/restart (linha ~70) — sem este guard,
+    # um lock passageiro derrubava a construção do RiskManager/Engine
+    # inteiro, inclusive tentativas de restart do supervisor.py (achado da
+    # revisão adversarial de 27/07). O estado em RAM (RiskManager._kill_switch)
+    # continua correto no processo atual mesmo se a escrita falhar aqui — só
+    # o espelho em disco fica temporariamente desatualizado até a próxima
+    # chamada bem-sucedida (mesmo espírito de risco aceito já documentado
+    # para protection_state.py: perder a escrita custa consistência entre
+    # restarts, nunca a decisão de risco do processo vivo).
+    try:
+        STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = STATE_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"halted": halted, "reason": reason}, indent=2),
+                       encoding="utf-8")
+        tmp.replace(STATE_PATH)  # atômico no mesmo filesystem, inclusive Windows/NTFS
+    except OSError as exc:
+        log.warning("Falha ao persistir state/kill_switch_state.json (%s) — "
+                    "estado em RAM (halted=%s) continua correto neste "
+                    "processo; disco fica desatualizado até a próxima save()",
+                    exc, halted)

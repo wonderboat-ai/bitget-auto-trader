@@ -33,6 +33,10 @@ research/*.jsonl
 # Dossiê diário gerado (arquivo histórico, não é código)
 /Dossie Cripto/
 
+# Trilha de auditoria arquivada na transição testnet->mainnet (27/07/2026) —
+# mesmo espírito de logs/*.jsonl acima: histórico, não código
+/Historico-Testnet-*/
+
 # Configuração local desta máquina (caminhos absolutos, específicos deste PC)
 .claude/
 .mcp.json
