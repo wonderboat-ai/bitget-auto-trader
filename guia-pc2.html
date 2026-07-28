@@ -232,6 +232,13 @@
   .rule p { margin: 0 0 10px; color: var(--danger-ink); }
   .rule p:last-child { margin-bottom: 0; }
   .rule strong { font-weight: 700; }
+  .rule.info {
+    background: var(--accent-soft);
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+    border-left-color: var(--accent);
+  }
+  .rule.info .rule-label,
+  .rule.info p { color: var(--accent-ink); }
 
   .tip, .warn, .ok-box {
     border-radius: 8px;
@@ -443,19 +450,19 @@
   <header class="hero">
     <div class="kicker">Guia de instalação · PC2</div>
     <h1>Deixe o motor rodando 24 horas num segundo computador</h1>
-    <p class="lede">Enquanto este PC fica livre para você desenvolver e testar melhorias, um segundo PC assume a operação contínua, com sua própria chave de API e sem depender do OneDrive.</p>
+    <p class="lede">Enquanto este PC fica livre para você desenvolver e testar melhorias, um segundo PC assume a operação contínua — com sua própria conta de testnet, chave de API e sem depender do OneDrive.</p>
 
     <div class="machines">
       <div class="machine">
         <div class="name">Este PC · PC1</div>
         <div class="role">Desenvolvimento</div>
-        <div class="detail">Testes com <code class="inline">--once</code>, sem <code class="inline">--live</code> contínuo enquanto o PC2 estiver de pé.</div>
+        <div class="detail">Testes à vontade, inclusive com <code class="inline">--live</code> pontual — conta própria, sem afetar o PC2.</div>
       </div>
       <div class="link">→</div>
       <div class="machine">
         <div class="name">PC novo · PC2</div>
         <div class="role">Operação 24h</div>
-        <div class="detail"><code class="inline">supervisor.py --live</code> rodando sem parar, chave de API própria.</div>
+        <div class="detail"><code class="inline">supervisor.py --live</code> rodando sem parar, conta e chave de API próprias.</div>
       </div>
     </div>
 
@@ -466,11 +473,11 @@
     </div>
   </header>
 
-  <div class="rule" id="regra">
-    <div class="rule-label">⚠ Regra de ouro — leia antes de tudo</div>
-    <p>O PC2 vai usar uma chave de API <strong>nova</strong>, mas essa chave acessa a <strong>mesma conta/saldo</strong> da testnet Bybit que este PC já usa. Os dois PCs "olham" para o mesmo dinheiro de testnet, só que com chaves diferentes.</p>
-    <p><strong>Por isso: os dois PCs nunca podem rodar <code class="inline">--live</code> em loop contínuo ao mesmo tempo.</strong> Se isso acontecer, os dois motores tentam gerenciar a mesma posição de forma independente — cada um com seu próprio controle de stop, cooldown e kill switch local — e podem se atropelar.</p>
-    <p>Na prática: <strong>PC2</strong> é o único que roda <code class="inline">supervisor.py --live</code> continuamente. <strong>PC1</strong> pode rodar <code class="inline">main.py --once</code> (sem <code class="inline">--live</code>) à vontade — é só simulação, não manda ordem nenhuma. O que nunca pode é este PC rodar <code class="inline">--live</code> em loop enquanto o PC2 estiver ligado.</p>
+  <div class="rule info" id="regra">
+    <div class="rule-label">Como funciona a separação de contas — leia antes de tudo</div>
+    <p>O PC2 vai usar uma <strong>conta de testnet separada</strong> da que este PC (PC1) usa — não é só uma chave nova, é um <strong>cadastro novo</strong> mesmo (e-mail diferente em testnet.bybit.com). O saldo e as posições do PC2 ficam completamente independentes dos deste PC.</p>
+    <p>Na prática, isso elimina o risco que existiria se os dois PCs compartilhassem a mesma conta (os dois motores tentando gerenciar a mesma posição ao mesmo tempo). Com contas separadas: <strong>PC2</strong> roda <code class="inline">supervisor.py --live</code> continuamente, 24h, na conta dele; <strong>PC1</strong> fica livre para desenvolvimento e testes — inclusive com <code class="inline">--live</code> pontual, se precisar — sem nenhum risco pra operação do PC2.</p>
+    <p>Mesmo assim, é bom hábito não deixar um <code class="inline">--live</code> esquecido rodando aqui por longos períodos sem acompanhar — não por conflito com o PC2, mas porque é dinheiro (de teste) sendo movimentado sem supervisão.</p>
   </div>
 
   <div class="prereqs">
@@ -479,7 +486,7 @@
       <li>O PC novo, com Windows, ligado na internet</li>
       <li>Uns 30–40 minutos livres</li>
       <li>Sua conta do GitHub (a mesma que já é dona do repositório — usuário <strong>wonderboat-ai</strong>)</li>
-      <li>Acesso à sua conta em <a href="https://testnet.bybit.com" target="_blank" rel="noopener">testnet.bybit.com</a>, para gerar uma chave de API nova</li>
+      <li>Um e-mail que você ainda não usou em <a href="https://testnet.bybit.com" target="_blank" rel="noopener">testnet.bybit.com</a>, para cadastrar a conta nova do PC2</li>
     </ul>
   </div>
   <p style="color:var(--ink-soft); font-size:0.92rem;">Todo comando abaixo é para o <strong>PowerShell</strong> do Windows (menu Iniciar → procure "Windows PowerShell").</p>
@@ -567,16 +574,19 @@ pip install -r requirements.txt</code></pre>
 
   <!-- PASSO 6 -->
   <section class="step" id="passo-6">
-    <div class="step-head"><div class="step-num">6</div><h2>Gerar uma chave de API nova na Bybit</h2></div>
-    <p>Esta parte é só sua — chave de API é credencial, não é algo que eu deva digitar por você.</p>
+    <div class="step-head"><div class="step-num">6</div><h2>Criar uma conta separada e gerar a chave de API</h2></div>
+    <p>Esta parte é só sua — conta e chave de API são credenciais, não é algo que eu deva criar ou digitar por você.</p>
     <ol>
-      <li>Entre em <a href="https://testnet.bybit.com" target="_blank" rel="noopener">testnet.bybit.com</a> e faça login.</li>
+      <li>Abra uma janela <strong>anônima/privada</strong> do navegador (Ctrl+Shift+N no Chrome/Edge) — assim você não usa por engano a sessão já logada da sua conta atual.</li>
+      <li>Vá em <a href="https://testnet.bybit.com" target="_blank" rel="noopener">testnet.bybit.com</a> e cadastre uma conta <strong>nova</strong>, com um e-mail diferente do que você já usa lá.</li>
+      <li>Confirme o cadastro (verificação por e-mail, se pedir) e faça login na conta nova.</li>
       <li>Vá em Gerenciamento de API (API Management).</li>
-      <li>Crie uma chave nova — dê um nome que ajude a lembrar, como <code class="inline">PC2-motor-24h</code>.</li>
+      <li>Crie uma chave — dê um nome que ajude a lembrar, como <code class="inline">PC2-motor-24h</code>.</li>
       <li>Permissões: marque <strong>leitura e negociação</strong> (Read-Write + Trade).</li>
       <li>Copie a <strong>API Key</strong> e o <strong>API Secret</strong> — o Secret só aparece uma vez.</li>
     </ol>
     <div class="warn"><span class="lbl">Nunca habilite</span>Permissão de saque (Withdraw). Não é necessária e não é segura.</div>
+    <div class="tip"><span class="lbl">Saldo de teste</span>A testnet costuma dar um saldo de brinde automaticamente pra conta nova — você confirma isso no Passo 8, com <code class="inline">diag_saldo.py</code>.</div>
   </section>
 
   <!-- PASSO 7 -->

@@ -182,25 +182,31 @@ padrões de chave/segredo — `_KEY=`/`_SECRET=` com valor, prefixos `sk-ant-`/
 não achou nenhum segredo real — só um placeholder óbvio (`README.md`, texto
 literal "seu_secret").
 
-**Decisão do Lucas sobre a arquitetura dos dois PCs, com uma regra nova e
-importante para qualquer sessão futura**: o PC novo ("PC2") vai rodar
-`supervisor.py --live` 24h/dia, autenticado com uma chave de API de testnet
-NOVA e SEPARADA da que este PC (PC1) usa — mas as duas chaves autenticam a
-MESMA conta/saldo da testnet Bybit (chave nova ≠ conta nova; não existe
-conceito de sub-conta em uso aqui). **Por causa disso, PC1 NUNCA deve rodar
-`main.py --live`/`supervisor.py --live` em loop contínuo ao mesmo tempo que o
-PC2 estiver rodando** — os dois processos gerenciariam a MESMA posição/saldo
-na exchange com estado local (kill switch, cooldown, proteções) inteiramente
-independente um do outro, quebrando a garantia de "nunca duas instâncias" que
-o projeto já tinha (antes cobria só duas instâncias na MESMA máquina/pasta
-OneDrive — agora se estende a duas MÁQUINAS diferentes na mesma conta). PC1
-segue livre para `--once` (dry-run, sem `--live`) e pesquisa/backtest — nunca
-um loop `--live` contínuo enquanto o PC2 estiver de pé. Pasta do PC2
+**Decisão do Lucas sobre a arquitetura dos dois PCs, revista no mesmo dia
+depois de eu explicar o risco da 1ª versão**: a ideia inicial era o PC novo
+("PC2") usar uma chave de API de testnet NOVA mas na MESMA conta que este PC
+(PC1) usa — o que criaria risco real (os dois motores gerenciando a MESMA
+posição/saldo, cada um com seu próprio kill switch/cooldown/proteções local,
+inteiramente independente um do outro). O Lucas perguntou explicitamente "mas
+se eu usar api de outra conta vai rodar?" e, confirmado que sim, decidiu por
+uma **CONTA de testnet SEPARADA para o PC2** (cadastro novo, e-mail diferente
+em testnet.bybit.com, chave de API própria) — não é só uma chave nova, é uma
+conta nova mesmo. Isso isola completamente o saldo/posições dos dois PCs na
+raiz do problema: não existe mais "a mesma posição sendo gerenciada duas
+vezes", porque não é mais a mesma posição. **Com contas separadas, a regra
+"nunca duas instâncias" do projeto (que sempre foi sobre estado/CONTA
+compartilhado) deixa de restringir PC1×PC2 especificamente** — mas a prática
+recomendada continua sendo PC2 = operação contínua 24h, PC1 = ambiente de
+dev (pode rodar `--live` pontual pra teste sem risco pro PC2, mas evitar
+deixar um loop esquecido rodando por muito tempo sem acompanhar, por ser
+dinheiro de teste sendo movimentado sem supervisão). Pasta do PC2
 deliberadamente FORA do OneDrive (decisão do Lucas) — clone local dedicado,
-sem sincronização. Guia completo de setup do PC2 entregue ao Lucas no chat
-desta sessão (Python/Git/GitHub CLI, clonar o repo, criar `.env` com a chave
-nova gerada por ELE na Bybit, validar com `diag_saldo.py`/`--once` antes do
-`--live`, deixar o PC sem suspensão, e como puxar atualizações futuras).
+sem sincronização. Guia completo de setup do PC2 entregue ao Lucas em dois
+formatos, ambos versionados no repositório: `PASSO-A-PASSO-PC2.md` (texto) e
+`guia-pc2.html` (página visual, também publicada como Artifact) — cobrem
+Python/Git/GitHub CLI, clonar o repo, criar a conta+chave nova na Bybit,
+criar o `.env`, validar com `diag_saldo.py`/`--once` antes do `--live`,
+deixar o PC sem suspensão, e como puxar atualizações futuras via `git pull`.
 
 **Fluxo de atualização de código daqui pra frente**: dev/testes continuam
 neste PC (PC1, pasta OneDrive) como sempre; quando uma mudança for testada e

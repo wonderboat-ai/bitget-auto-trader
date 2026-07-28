@@ -6,32 +6,28 @@ desenvolvimento/upgrades sem interferir no que está rodando ao vivo.
 
 Repositório do código (privado): https://github.com/wonderboat-ai/bybit-auto-trader
 
-## REGRA DE OURO — leia antes de tudo
+## Como funciona a separação de contas — leia antes de tudo
 
-O PC2 vai usar uma chave de API **nova**, mas essa chave acessa a **mesma
-conta/saldo** da testnet Bybit que este PC já usa. Ou seja: os dois PCs
-"olham" para o mesmo dinheiro (de brinquedo, testnet), só que com chaves
-diferentes.
+O PC2 vai usar uma **conta de testnet separada** da que este PC (PC1) usa —
+não é só uma chave nova, é um **cadastro novo** mesmo (e-mail diferente em
+testnet.bybit.com). Isso significa que o saldo e as posições do PC2 ficam
+**completamente independentes** dos deste PC: cada motor só enxerga e
+gerencia a própria conta.
 
-**Por isso, a regra é simples e não pode ser quebrada: os dois PCs NUNCA
-podem rodar `--live` em loop contínuo ao mesmo tempo.** Se isso acontecer,
-os dois motores vão tentar gerenciar a mesma posição de forma independente
-(cada um com seu próprio controle de stop/cooldown/kill switch local) e
-podem se atropelar — abrir ordem duplicada, um cancelar proteção que o
-outro armou, etc.
+Na prática, isso elimina o risco que existiria se os dois PCs
+compartilhassem a mesma conta (os dois motores tentando gerenciar a mesma
+posição ao mesmo tempo, cada um com seu próprio kill switch/cooldown local).
+Com contas separadas:
 
-Como isso funciona na prática:
-- **PC2** = o único que roda `python supervisor.py --live` de forma
-  contínua, 24h.
-- **PC1** (este PC) = pode rodar `python main.py --once` (sem `--live`)
-  à vontade, quantas vezes quiser, mesmo com o PC2 ligado — isso é só
-  simulação, não manda ordem nenhuma pra exchange, é seguro. O que nunca
-  pode é este PC rodar `--live` em loop enquanto o PC2 estiver de pé.
+- **PC2** = roda `python supervisor.py --live` continuamente, 24h, na
+  conta dele.
+- **PC1** (este PC) = fica livre para desenvolvimento e testes — inclusive
+  com `--live` pontual, se precisar — sem nenhum risco pra operação do
+  PC2, porque são contas diferentes.
 
-Antes de ligar o PC2 pela primeira vez, confira que não tem nenhuma posição
-aberta pendente (rode `python diag_saldo.py` aqui neste PC, ou olhe direto
-no site da testnet) — assim o PC2 começa "limpo", sem herdar nada no meio
-do caminho.
+Mesmo assim, é bom hábito não deixar um `--live` esquecido rodando aqui por
+longos períodos sem acompanhar — não por risco de conflito com o PC2, mas
+porque é dinheiro (de teste) sendo movimentado sem supervisão.
 
 ## O que você vai precisar
 
@@ -39,8 +35,9 @@ do caminho.
 - Uns 30–40 minutos.
 - Sua conta do GitHub (a mesma que já foi usada para criar o repositório —
   usuário `wonderboat-ai`).
-- Acesso à sua conta da testnet Bybit (https://testnet.bybit.com) para
-  gerar uma chave de API nova.
+- Um e-mail que você ainda não usou em testnet.bybit.com, para cadastrar a
+  conta nova do PC2 (pode ser um alias/"+" do seu e-mail atual, se o seu
+  provedor suportar, ou outro e-mail que você tenha).
 
 Todos os comandos abaixo são para o **PowerShell** do Windows (o programa
 "Windows PowerShell", vem instalado por padrão — procure no menu Iniciar).
@@ -139,20 +136,29 @@ novo:
 pip install pip-system-certs
 ```
 
-## Passo 6 — Gerar uma chave de API NOVA na Bybit (testnet)
+## Passo 6 — Criar uma conta de testnet separada e gerar a chave de API
 
-Esta parte é só sua — eu não tenho como fazer por você (chave de API é
-credencial, é você quem precisa criar e colar).
+Esta parte é só sua — eu não tenho como fazer por você (conta e chave de
+API são credenciais, é você quem precisa criar).
 
-1. Entre em https://testnet.bybit.com e faça login na sua conta de testnet.
-2. Vá em Gerenciamento de API (API Management / ícone de perfil → API).
-3. Crie uma chave NOVA (dê um nome que ajude a lembrar depois, tipo
+1. No PC novo, abra uma janela **anônima/privada** do navegador
+   (Ctrl+Shift+N no Chrome/Edge) — assim você não usa por engano a sessão
+   já logada da sua conta atual.
+2. Vá em https://testnet.bybit.com e cadastre uma conta **nova**, com um
+   e-mail diferente do que você já usa lá.
+3. Confirme o cadastro (verificação por e-mail, se pedir) e faça login na
+   conta nova.
+4. Vá em Gerenciamento de API (API Management / ícone de perfil → API).
+5. Crie uma chave (dê um nome que ajude a lembrar depois, tipo
    `PC2-motor-24h`).
-4. Permissões: marque **leitura e negociação** (Read-Write + Trade) — sem
+6. Permissões: marque **leitura e negociação** (Read-Write + Trade) — sem
    isso o motor não consegue colocar ordem nem stop. **Nunca** habilite
    permissão de saque (Withdraw) — não precisa e não é seguro.
-5. Copie a **API Key** e o **API Secret** mostrados na tela (o Secret só
+7. Copie a **API Key** e o **API Secret** mostrados na tela (o Secret só
    aparece uma vez — guarde antes de fechar a tela).
+
+A testnet costuma dar um saldo de brinde automaticamente pra conta nova —
+você confirma isso no Passo 8, com `diag_saldo.py`.
 
 ## Passo 7 — Criar o arquivo `.env` com a chave nova
 
