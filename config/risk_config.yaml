@@ -11,7 +11,15 @@ market:
   # sinais SHORT são vetados, alavancagem forçada a 1, exposição total limitada
   # a 1x o equity (sem margem). Virar para "spot" é mudança manual e deliberada,
   # como tudo neste arquivo.
-  type: "spot"
+  # REVERTIDO para "perp" em 28/07/2026, decisão explícita do Lucas ("liga long
+  # e short em derivativos") — verificado antes por sonda só-leitura que a
+  # chave de API de mainnet configurada tem permissão de ContractTrade/
+  # Derivatives (LEVEL_2 KYC, unifiedMarginStatus=5). ATENÇÃO: isso NÃO
+  # confirma que a Bybit vai aceitar a ordem em si — o bloqueio de compliance
+  # de 15/07/2026 (retCode 10024/KYC_PROMPT_TOAST) acontecia na CRIAÇÃO da
+  # ordem, não na permissão da chave; a primeira entrada real em perp é o
+  # teste de verdade. Se cair no mesmo bloqueio, volta pra "spot".
+  type: "perp"
 
 account:
   # Capital de referência para sizing (em USDT). Em testnet, valor fictício.
@@ -22,8 +30,11 @@ per_trade:
   risk_pct: 0.5            # 0.5% do capital por trade
   # Stop-loss é OBRIGATÓRIO. Sem stop, o trade é vetado.
   require_stop_loss: true
-  # Alavancagem máxima permitida por posição.
-  max_leverage: 3
+  # Alavancagem máxima permitida por posição. BAIXADO de 3 para 2 em
+  # 28/07/2026, decisão explícita do Lucas ao religar perp/short ("2x") —
+  # o cálculo em risk_manager.evaluate() é min(max_leverage, necessária
+  # pelo notional/equity), então este valor é o TETO real.
+  max_leverage: 2
   # Teto de capital por trade INDIVIDUAL, em % do equity (decisão do Lucas,
   # 17/07/2026). Motivo: o sizing por risco fixo (risk_pct / distância do
   # stop) não tinha teto próprio — só o agregado de portfólio (abaixo). Com
@@ -31,13 +42,15 @@ per_trade:
   # ao vivo: ~84% numa entrada só). Quando o size pelo risco excederia este
   # teto, o RiskManager REDUZ o tamanho pra caber (nunca aumenta risco, só
   # diminui) — a entrada acontece, só menor, deixando caixa pra outros trades.
-  # ELEVADO de 20.0 para 100.0 em 27/07/2026, decisão do Lucas: com equity
-  # real de ~10 USDT (início do teste em mainnet), 20% (~2 USDT) cortava o
-  # nocional abaixo do mínimo de ordem da Bybit spot (~5 USDT), impedindo
-  # qualquer entrada na prática. Com capital tão pequeno o teto de 20% não
-  # protege nada (não há concentração excessiva possível); reavaliar se o
-  # capital crescer o suficiente pra o teto voltar a fazer sentido.
-  max_notional_pct_equity: 100.0
+  # ELEVADO de 20.0 para 100.0 em 27/07/2026 (equity pequeno, ver histórico).
+  # BAIXADO de 100.0 para 50.0 em 28/07/2026, decisão do Lucas ("equity 50%
+  # pra cada BTC e ETH"): é um teto POR TRADE, não por símbolo (o código não
+  # tem alocação dedicada por símbolo) — com só BTC/USDT e ETH/USDT
+  # configurados, um teto de 50% em cada trade individual impede que um
+  # símbolo sozinho consuma o equity que o outro precisaria, aproximando o
+  # 50/50 pedido na prática. Não é uma reserva rígida por símbolo (se só um
+  # sinal aparecer, ele usa até 50%, não os 100%; o resto fica em caixa).
+  max_notional_pct_equity: 50.0
 
 portfolio:
   # Nº máximo de posições abertas simultâneas.

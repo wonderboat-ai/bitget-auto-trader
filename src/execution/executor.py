@@ -243,28 +243,6 @@ class Executor:
                 audit("take_profit_skipped", symbol=signal.symbol,
                       take_profit=take_profit,
                       reason="spot sem OCO — saldo base ocupado pelo stop")
-            # A proteção é salva SEMPRE em spot (20/07) — não só quando há TP
-            # fixo: com trailing a posição não tem alvo fixo, e a saída por
-            # sinal também precisa do registro (profile). O arquivo é o
-            # registro da posição, não só do alvo de TP.
-            trail_distance = None
-            peak_price = None
-            if signal.trailing:
-                # Distância do trailing = a distância de risco REAL no fill
-                # (mesma que o stop re-ancorado usa) — o pico começa no
-                # próprio fill; o engine sobe o stop conforme o pico avança.
-                trail_distance = abs(fill_price - stop_price)
-                peak_price = fill_price
-            protection_state.set_protection(
-                signal.symbol, entry_price=fill_price,
-                take_profit=take_profit, stop_price=stop_price,
-                size=protect_size, stop_id=stop.get("id"),
-                # profile: a saída por SINAL (20/07) precisa saber qual
-                # perfil abriu a posição pra consultar a estratégia e o
-                # timeframe certos no ciclo de saída.
-                profile=signal.profile,
-                trailing=signal.trailing, trail_distance=trail_distance,
-                peak_price=peak_price)
         elif take_profit:
             try:
                 tp = self.client.set_take_profit(signal.symbol, side, size,
@@ -275,6 +253,36 @@ class Executor:
                 audit("take_profit_failed", symbol=signal.symbol, side=side,
                       size=size, take_profit=take_profit,
                       error=str(exc))
+
+        # Proteção persistida SEMPRE, spot e perp (28/07/2026 — antes só
+        # spot persistia aqui, pro TP por software). Perp precisa igualmente:
+        # sem isto, engine.py não tem como detectar/auditar quando o stop ou
+        # o TP real dispara, nem cancelar a ordem irmã que fica órfã (achado
+        # ao vivo em 28/07/2026, primeira vez que perp operou de verdade
+        # neste projeto — ver engine.py:_check_perp_exits). trail_distance/
+        # peak_price também servem aos dois modos: começam no próprio fill;
+        # quem sobe/desce o stop com o preço é o engine (spot desde 20/07;
+        # perp desde 28/07 — ver engine.py:_update_perp_trailing_stop).
+        trail_distance = None
+        peak_price = None
+        if signal.trailing:
+            trail_distance = abs(fill_price - stop_price)
+            peak_price = fill_price
+        protection_state.set_protection(
+            signal.symbol, entry_price=fill_price,
+            take_profit=take_profit, stop_price=stop_price,
+            size=protect_size, stop_id=stop.get("id"),
+            tp_id=tp.get("id") if tp else None,
+            # side (28/07/2026): "long"/"short" — necessário pro PnL e pro
+            # trailing terem o sinal certo (short lucra com o preço caindo;
+            # o stop desce em vez de subir). Perp agora suporta os dois.
+            side="long" if signal.direction == Direction.LONG else "short",
+            # profile: a saída por SINAL (20/07, spot) precisa saber qual
+            # perfil abriu a posição pra consultar a estratégia/timeframe
+            # certos no ciclo de saída.
+            profile=signal.profile,
+            trailing=signal.trailing, trail_distance=trail_distance,
+            peak_price=peak_price)
 
         audit("order_executed", symbol=signal.symbol, side=side, size=size,
               protect_size=protect_size,

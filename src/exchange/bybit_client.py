@@ -97,11 +97,25 @@ class BybitClient:
     def is_spot(self) -> bool:
         return self._default_type == "spot"
 
-    @staticmethod
-    def _with_retry(fn: Any, *args: Any, retries: int = 3, backoff: float = 1.0, **kwargs: Any) -> Any:
+    def _with_retry(self, fn: Any, *args: Any, retries: int = 3, backoff: float = 1.0, **kwargs: Any) -> Any:
         """Reexecuta `fn` em caso de erro de rede transitório (timeout, SSL EOF,
-        conexão recusada), com backoff exponencial. Não retenta erros de negócio
-        (credencial inválida, parâmetro errado etc.) — só falha de transporte."""
+        conexão recusada) ou de timestamp desatualizado (retCode 10002 da Bybit
+        -> `ccxt.InvalidNonce`, subclasse de `NetworkError`), com backoff
+        exponencial. Não retenta erros de negócio (credencial inválida,
+        parâmetro errado etc.) — só falha de transporte.
+
+        InvalidNonce ganha tratamento especial (achado ao vivo em 28/07/2026:
+        ~5h23min de `cycle_error` ininterrupto até o processo ser reiniciado
+        manualmente, reproduzido de novo minutos depois de um restart limpo —
+        não era drift de relógio real, `local vs servidor` medido na hora
+        ficou em <1s). Causa raiz: `load_time_difference()` mede o offset
+        local<->servidor com UMA ÚNICA requisição, só no boot (`__init__`) —
+        se essa medição pegar uma requisição lenta/com jitter (rede, TLS, o
+        próprio Avast interceptando HTTPS, já documentado como fonte de
+        instabilidade neste projeto), o offset fica errado e TODA chamada
+        assinada subsequente falha, pro resto da vida do processo, até
+        reiniciar. Sem re-sincronizar aqui, as 3 tentativas de retry
+        repetem a mesma assinatura ruim e sempre falham do mesmo jeito."""
         last_exc: Exception | None = None
         for attempt in range(1, retries + 1):
             try:
@@ -111,10 +125,22 @@ class BybitClient:
                 if attempt == retries:
                     break
                 wait = backoff * (2 ** (attempt - 1))
-                log.warning(
-                    "Erro de rede transitório (tentativa %d/%d): %s — nova tentativa em %.1fs",
-                    attempt, retries, exc, wait,
-                )
+                if isinstance(exc, ccxt.InvalidNonce):
+                    log.warning(
+                        "Timestamp desatualizado (tentativa %d/%d): %s — "
+                        "re-sincronizando relógio com o servidor antes de "
+                        "tentar de novo em %.1fs",
+                        attempt, retries, exc, wait,
+                    )
+                    try:
+                        self.exchange.load_time_difference()
+                    except Exception as resync_exc:  # noqa: BLE001
+                        log.warning("Falha ao re-sincronizar relógio: %s", resync_exc)
+                else:
+                    log.warning(
+                        "Erro de rede transitório (tentativa %d/%d): %s — nova tentativa em %.1fs",
+                        attempt, retries, exc, wait,
+                    )
                 time.sleep(wait)
         raise last_exc  # type: ignore[misc]
 
@@ -385,6 +411,13 @@ class BybitClient:
         é a fonte da verdade do gatilho vigente."""
         params = {"orderFilter": "tpslOrder"} if self.is_spot else {"trigger": True}
         return self._with_retry(self.exchange.fetch_open_orders, symbol, params=params)
+
+    def cancel_order(self, order_id: str, symbol: str) -> Any:
+        """Cancela UMA ordem específica (28/07/2026) — usado pra derrubar a
+        ordem IRMÃ (stop ou TP) que fica órfã em perp quando a outra dispara
+        (Bybit não tem OCO nativo entre duas condicionais criadas
+        separadamente; ver engine.py:_handle_perp_position_closed)."""
+        return self._with_retry(self.exchange.cancel_order, order_id, symbol)
 
     def cancel_all(self, symbol: str) -> Any:
         """Cancela toda ordem aberta do símbolo — precisa cobrir a categoria

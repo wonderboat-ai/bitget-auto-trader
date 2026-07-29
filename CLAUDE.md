@@ -1,4 +1,4 @@
-# CLAUDE.md — Bybit Auto Trader (handoff 2026-07-27/28, ~madrugada pós-virada pra MAINNET)
+# CLAUDE.md — Bybit Auto Trader (handoff 2026-07-29, madrugada, sessão perp)
 
 Contexto vivo do projeto para agentes (Claude Code/Cowork). Fonte completa de
 regras: `INSTRUCOES-PROJETO-v2.md` v2 + `RASCUNHO-instrucoes-v9-colar-manualmente.md`
@@ -7,6 +7,211 @@ do Claude Project — substitui a v8, que nunca chegou a ser colada, mesmo
 padrão da v6→v7). Guia operacional humano: `PASSO-A-PASSO.md` (bootstrapping
 testnet — todas as etapas fechadas, ver seu próprio aviso de topo). Idioma
 de trabalho: português do Brasil. Comentários de código explicam causa raiz.
+
+## PRÓXIMA AÇÃO (ler antes de qualquer outra coisa)
+
+**O motor NÃO está rodando.** Achado ao encerrar a sessão de 28-29/07: nenhum
+processo `main.py`/`supervisor.py` vivo, e não há `engine_stop` limpo na
+trilha depois do último ciclo real (03:18:25 UTC de 29/07) — o processo
+morreu ou foi encerrado sem deixar rastro (não fui eu; não há confirmação de
+quem/o quê). A posição real (ETH/USDT perp long, ~0,0288 contratos, entrada
+1.901,40) continua protegida pelo stop (1.890,41) e TP (1.923,38) reais na
+exchange, independente do processo — mas SEM o bot supervisionando
+(trailing não se move, fechamento não é auditado) enquanto ficar parado.
+
+**Antes de religar, nessa ordem:**
+1. Rodar a suíte completa (`python tests\test_smoke.py` + `python
+   tests\test_ciclo.py`) — a seção 31 (trailing em perp, 9 sub-testes,
+   escrita nesta sessão) **nunca foi executada**; o Lucas pediu
+   explicitamente pra parar antes de rodar e avisar primeiro, a sessão
+   encerrou nesse ponto. Última contagem CONFIRMADA (antes da seção 31):
+   288/288 (280 smoke + 8 ciclo).
+2. Corrigir o que a seção 31 apontar, se apontar algo.
+3. Confirmar que não há OUTRO processo do motor rodando em paralelo antes de
+   religar (checar `Get-CimInstance Win32_Process -Filter "Name='python.exe'"`
+   filtrando `main.py`/`supervisor.py` — nesta sessão rolou um incidente de
+   duas instâncias simultâneas, ver "Incidente" abaixo).
+4. Religar via `python supervisor.py --live` (mesmo comando de sempre —
+   nada mudou na forma de iniciar).
+5. Confirmar no primeiro ciclo: `market_type: perp` (MCP
+   `trader_get_status`), posição ETH reconciliada sem erro, e — importante
+   —, watchdog nos primeiros minutos pra ver se o trailing novo move o
+   stop de verdade num caso real (nunca validado ao vivo, só em teste).
+
+## Sessão 28-29/07/2026 — perp/short religados, dois bugs estruturais achados e corrigidos
+
+A pedido explícito do Lucas ("habilita agora modo long e short futuros"),
+depois de eu inicialmente recusar por causa do bloqueio de compliance de
+15/07 (retCode 10024) — ele esclareceu que a conta configurada no `.env`
+(mesma chave, não uma conta nova) já tinha permissão de derivativos, pedi
+uma sonda só-leitura (`privateGetV5UserQueryApi`) que confirmou
+`ContractTrade`/`Derivatives` habilitados na chave, KYC `LEVEL_2`,
+`unifiedMarginStatus: 5` — e ele autorizou a virada. Decisões de risco
+tomadas por ele, nomeadas explicitamente: alavancagem **2x** (teto, não
+valor forçado — `risk_manager.evaluate()` calcula
+`min(max_leverage, necessária)`) e depois, à parte, **teto de 50% do
+equity por trade** ("equity 50% pra cada BTC e ETH" — não é uma reserva
+rígida por símbolo, o código não tem isso; é o teto por-trade existente
+baixado de 100% pra 50%, que na prática reparte razoavelmente entre os 2
+símbolos configurados). `config/risk_config.yaml`: `market.type: "perp"`,
+`per_trade.max_leverage: 2`, `per_trade.max_notional_pct_equity: 50.0`.
+
+**Confirmado ao vivo: o bloqueio de compliance de 15/07 NÃO se repetiu.**
+Primeira ordem real em perpétuo da história do projeto, ETH/USDT long,
+22:41:04 UTC de 28/07, entrada 1.916,62 — aceita, com stop E take-profit
+reais na exchange (perp tem os dois nativamente; diferente de spot, que
+nunca teve TP real por falta de OCO). BTC continua falhando à parte —
+motivo banal, não é bloqueio: com equity ~110 USDT e teto de 50%, o
+nocional calculado (~55 USDT) fica abaixo do mínimo de ordem da Bybit pra
+BTC perp (0,001 BTC ≈ 64 USDT no preço atual) — `symbol_cycle_error`
+recorrente, "amount must be greater than minimum amount precision of
+0.001". Não corrigido (é decisão de capital/teto, não bug).
+
+**Incidente 1 — `InvalidNonce` (retCode 10002), ~5h23min de `cycle_error`
+ininterrupto.** Achado pelo monitor da trilha que eu tinha armado no início
+da sessão (mesmo padrão do `Monitor` de 19/07): entre 07:56 e 13:16 UTC de
+28/07 (bem antes da virada pra perp — isso é bug antigo, não relacionado),
+TODA chamada assinada à Bybit falhou com timestamp desatualizado. Causa
+raiz: `BybitClient.__init__` mede o offset de relógio local↔servidor com
+`load_time_difference()` **uma única vez no boot**; se essa medição pegar
+uma requisição lenta/com jitter (rede, TLS, o Avast interceptando HTTPS —
+já documentado como fonte de instabilidade neste projeto), o offset fica
+errado e TODA chamada seguinte falha, pro resto da vida do processo. Corrigido
+em `src/exchange/bybit_client.py`: `_with_retry` deixou de ser
+`@staticmethod`, agora trata `ccxt.InvalidNonce` (subclasse de
+`NetworkError`) como caso especial — re-sincroniza (`load_time_difference()`
+de novo) antes de cada nova tentativa, em vez de repetir a mesma assinatura
+ruim 3x e desistir. Confirmado reproduzindo o erro exato ao vivo (retCode
+10002 batendo de novo minutos depois de um restart limpo) e corrigindo.
+
+**Incidente 2 — duas instâncias do motor rodando ao mesmo tempo, ~57s de
+sobreposição.** O Lucas religou o motor manualmente ("liguei o motor") sem
+saber que eu já tinha religado ~1min antes (dois `engine_start` seguidos
+sem `engine_stop` entre eles). Achado ao checar `Get-CimInstance
+Win32_Process` — duas árvores `supervisor.py`→`main.py` completas e
+independentes. Parei a mais nova, verifiquei `state/kill_switch_state.json`
+/`cooldown_state.json`/`spot_protections.json` — nenhuma corrupção (só
+vetos/pulos duplicados na sobreposição, nenhuma ordem real disparada duas
+vezes). **Lição pra sessões futuras**: eu aviso quando ligo/desligo o motor
+por aqui, mas se o Lucas mexer em paralelo sem eu saber, esse risco existe
+de novo — vale confirmar "está rodando?" antes de religar manualmente.
+
+**Achado operacional, reforça lição já documentada (26/07): `CTRL_C_EVENT`
+via `AttachConsole`/`GenerateConsoleCtrlEvent` não é confiável pra parar um
+processo que eu mesmo iniciei via `run_in_background` do Bash tool** — falhou
+repetidas vezes nesta sessão especificamente pras árvores que eu tinha
+subido assim (funcionou normalmente pra parar a árvore que o Lucas tinha
+iniciado do jeito dele). Fallback usado: `TaskStop` no id da tarefa em
+background — funciona, mas é um kill forçado (sem `engine_stop` limpo na
+trilha, indistinguível de crash na auditoria). Usar com essa ressalva em
+mente.
+
+### Bug crítico achado e corrigido: fechamento de posição PERP nunca era auditado
+
+Perp nunca tinha operado de verdade neste projeto antes de hoje (bloqueio de
+compliance desde 15/07) — então o mecanismo equivalente ao `_check_spot_exits`
+(que audita `trade_closed`, alimenta o cooldown, e cuida de órfãos) **nunca
+tinha sido construído pro lado perp**. Descoberto ao vivo: a 1ª posição real
+fechou pelo stop e nada foi auditado — nem `trade_closed`, nem cooldown — e
+a ordem de TP irmã ficou **ativa e órfã** na exchange (Bybit não tem OCO
+nativo entre duas condicionais criadas separadamente). Prova concreta: o
+Lucas mandou print da tela "Open Orders" da Bybit mostrando **4 ordens
+condicionais pro ETH quando só deveriam existir 2** — as outras 2 eram TPs
+órfãos de posições já fechadas (uma de antes do fix existir, outra de
+DEPOIS — ver ressalva abaixo). Ele cancelou as duas manualmente.
+
+**Fix** (a pedido do Lucas, "corrige o fechamento auditado pro perp"):
+- `src/execution/protection_state.py`: ganhou `tp_id` (só populado em
+  perp — spot nunca arma TP real) e `side` (`"long"`/`"short"`,
+  default `"long"`). Docstring atualizada — deixou de ser só sobre spot.
+- `src/execution/executor.py`: agora persiste a proteção em **toda**
+  entrada, spot E perp (antes só spot persistia, pro TP por software) —
+  grava `stop_id`, `tp_id` e `side` reais.
+- `src/exchange/bybit_client.py`: novo `cancel_order(order_id, symbol)`.
+- `src/engine.py`: novo `_check_perp_exits()`/`_handle_perp_position_closed()`
+  — a cada ciclo, detecta posição perp rastreada que sumiu, confirma via
+  `fetch_order` qual das DUAS ordens reais (stop ou TP) disparou, audita
+  `trade_closed` com o fill real e o `side` correto, alimenta o cooldown, e
+  **cancela a ordem irmã órfã** (só quando confirma com certeza qual
+  disparou — nunca cancela às cegas, mesmo risco aceito já documentado no
+  caminho spot pra não derrubar a proteção de uma posição nova reaberta no
+  meio). Backfill na primeira vez que vê uma posição perp sem registro
+  (cobre a posição real que já estava aberta quando o fix foi escrito).
+  Chamado em `run_once()` ao lado de `_check_spot_exits()` — cada um se
+  auto-gate pelo `market_type` real, nunca os dois fazem trabalho no mesmo
+  boot.
+
+**Ressalva achada e NÃO resolvida — `external_close_unconfirmed` mesmo com
+o fix ativo.** Um dos 2 TPs órfãos que o Lucas cancelou (`e34ff50c`) era de
+uma posição que fechou DEPOIS do fix já estar rodando. Investigado: a
+ordem de STOP dela **disparou de verdade** (`triggerPrice` bateu), mas a
+Bybit **rejeitou a execução** (`status: "rejected"`, `filled: 0`,
+`rejectReason: "EC_NoError"` — "sem erro", preenchimento zero mesmo assim).
+A posição fechou por algum mecanismo que não deixou rastro confirmável em
+nenhuma das duas ordens rastreadas. O fix se comportou como desenhado
+(nunca inventa um fill que não confirmou — `reason="external_close_unconfirmed"`,
+PnL aproximado) mas, como consequência do mesmo desenho conservador
+("nunca cancela às cegas sem confirmar qual disparou"), a ordem órfã não
+foi limpa automaticamente nesse caso. Não investigado mais fundo (provável
+comportamento específico da Bybit pra ordem condicional rejeitada — sem
+padrão anterior neste projeto pra comparar) nem corrigido — fica como risco
+aceito e documentado, mesmo espírito de outras aproximações já aceitas no
+caminho spot. Se voltar a acontecer, checar `Open Orders` na Bybit
+periodicamente por enquanto.
+
+### Bug relacionado achado e corrigido: PnL/side hardcoded como "long"
+
+Ao investigar o trailing em perp (pedido seguinte do Lucas, "corrige o
+trailing em perp também"), achei que `_handle_perp_position_closed`
+hardcodeava `side="long"` no audit e usava `(exit_price - entry_price) *
+size` sem inverter — fórmula ERRADA pra uma posição SHORT (que agora é
+alcançável de verdade, já que o Lucas religou short em perp hoje; a
+estratégia determinística já gera sinais SHORT, `deterministic.py`, e o
+`risk_manager` não veta mais em perp). Nenhuma posição short abriu ainda
+hoje (só LONG apareceu na prática), então o bug nunca chegou a produzir um
+número errado ao vivo — mas era alcançável no próximo cruzamento EMA pra
+baixo. Corrigido junto com o mesmo fix de proteção: `side` agora
+rastreado ponta a ponta (`protection_state.set_protection`/
+`backfill_from_audit` → `executor.py` grava a partir de
+`signal.direction` → `engine.py` lê pra inverter o sinal do PnL e auditar
+o `side` real, não mais fixo).
+
+### Trailing em perp — implementado, testes ESCRITOS mas NÃO EXECUTADOS
+
+A pedido do Lucas ("corrige o trailing em perp também" — os metadados
+`trail_distance`/`peak_price` já eram gravados na entrada desde o fix
+anterior, mas nada movia o stop de verdade). Novo
+`engine._update_perp_trailing_stop(symbol, protection, price)`, chamado a
+cada ciclo dentro de `_check_perp_exits()` pra todo símbolo rastreado ainda
+aberto com `trailing=True`. Diferente do trailing spot
+(`_update_trailing_stop`): perp nunca tem o problema de saldo ocupado —
+mover é sempre cancelar a ordem de STOP antiga (por id, via o
+`cancel_order` novo) e criar outra; **o TP nunca é tocado**, fica intacto o
+tempo todo (diferença estrutural do spot, que precisa cancelar TUDO pra
+liberar saldo). Suporta LONG e SHORT — a direção inverte a lógica inteira
+(pico vira fundo, sobe vira desce, `origin_side` pro `set_stop_loss` também
+inverte). Mesmas salvaguardas do trailing spot: cura de arquivo stale
+(confere o gatilho REAL na exchange antes de mover), nunca tenta mover se o
+nível já foi rompido (perp sempre tem stop real — quem dispara é a própria
+ordem, não este método; `_check_perp_exits` do próximo ciclo reconcilia),
+aborta sem crashar se o stop já fechou/o cancelamento falha, re-arma no
+preço ANTIGO se o stop NOVO falhar depois do cancelamento (nunca deixa a
+posição sem stop nenhum).
+
+**Seção 31 de `tests/test_smoke.py` (9 sub-testes) escrita cobrindo**: move
+LONG, move SHORT, melhora abaixo do passo mínimo (só persiste o pico),
+nível já rompido (nenhuma chamada — deixa a ordem real disparar), cura de
+arquivo stale, stop já confirmadamente fechado (aborta, deixa pro próximo
+ciclo), falha ao cancelar o antigo (aborta sem crashar), falha ao armar o
+novo (re-arma no antigo, audita `trailing_move_failed_stop_rearmed`), sem
+stop_id/size rastreado (aborta). **NUNCA RODADA** — o Lucas pediu
+explicitamente pra eu avisar e parar antes de rodar a suíte (sessão
+anterior tinha rodado a suíte várias vezes com o motor AO VIVO por
+descuido — sem dano confirmado, mas é exatamente o risco que o protocolo
+"nunca rodar a suíte com o motor vivo" existe pra evitar), e a sessão foi
+encerrada nesse ponto antes de eu conseguir confirmar "motor parado" com
+ele. **Isso é a pendência #1 da próxima sessão — ver "PRÓXIMA AÇÃO" no
+topo do arquivo.**
 
 **27/07/2026 — O DIA DA TRANSIÇÃO DE TESTNET PARA MAINNET.** A pedido
 explícito do Lucas ("vamos rodar na mainnet", chave de API de mainnet
@@ -1930,6 +2135,46 @@ da suíte — nenhuma contaminação residual.
     o importe) ANTES de qualquer outra coisa — `src/logger.py` sozinho não
     carrega o `.env`.
 
+## Bugs corrigidos em 28-29/07 (sessão perp, não reintroduzir)
+
+48. `src/exchange/bybit_client.py` (`_with_retry`): `retCode 10002` da
+    Bybit (`ccxt.InvalidNonce`, subclasse de `NetworkError` — já caía no
+    retry existente, mas sem nunca re-sincronizar) fazia TODA chamada
+    assinada falhar pro resto da vida do processo, uma vez que
+    `load_time_difference()` (medido só uma vez no boot) pegasse uma
+    medição ruim. Achado ao vivo: ~5h23min de `cycle_error` ininterrupto
+    (07:56-13:16 UTC de 28/07). Corrigido: `_with_retry` deixou de ser
+    `@staticmethod`, re-sincroniza o relógio (`self.exchange.load_time_difference()`)
+    antes de cada nova tentativa quando o erro é `InvalidNonce`, em vez de
+    repetir a mesma assinatura ruim 3x. Ver "Sessão 28-29/07" no topo do
+    arquivo pro relato completo.
+49. `src/engine.py`: **fechamento de posição PERP nunca era auditado** —
+    perp nunca tinha operado de verdade neste projeto (bloqueio de
+    compliance desde 15/07), então o equivalente de `_check_spot_exits`
+    nunca tinha sido construído pro lado perp. Sem isto: nenhum
+    `trade_closed` saía quando o stop/TP real disparava, o cooldown por
+    símbolo nunca era alimentado, e a ordem IRMÃ (stop ou TP) que não
+    disparou ficava ATIVA E ÓRFÃ na exchange — risco real confirmado ao
+    vivo (2 TPs órfãos encontrados na conta real, um deles capaz de
+    executar contra uma posição nova não relacionada se o preço voltasse
+    ao alvo antigo). Corrigido: `protection_state.py` ganhou `tp_id`/`side`;
+    `executor.py` persiste a proteção em toda entrada agora (spot E perp,
+    antes só spot); `bybit_client.py` ganhou `cancel_order`; `engine.py`
+    ganhou `_check_perp_exits`/`_handle_perp_position_closed` (confirma via
+    `fetch_order` qual das duas ordens disparou, audita `trade_closed` com
+    o fill real e o `side` correto — PnL tinha fórmula fixa de LONG, errada
+    pra SHORT, corrigido junto —, alimenta o cooldown, cancela a órfã só
+    quando confirma com certeza qual disparou). Suíte 288/288 confirmada
+    (280 smoke + 8 ciclo), deployado e validado ao vivo (backfill recuperou
+    a posição real que já estava aberta antes do fix existir). **Ressalva
+    NÃO resolvida**: um caso real onde o stop disparou mas a Bybit
+    REJEITOU a execução (`status=rejected`, `filled=0`) deixou uma ordem
+    órfã escapar da limpeza automática (o fix corretamente não confirmou o
+    fechamento nesse caso, então não cancelou nada às cegas) — ver "Sessão
+    28-29/07" no topo pro relato completo. Trailing real pra perp
+    (`_update_perp_trailing_stop`, mesma sessão) tem testes ESCRITOS
+    (seção 31) mas NUNCA RODADOS — ver "PRÓXIMA AÇÃO" no topo do arquivo.
+
 ## Estado exato — 21/07 ~21:25 UTC (investigação do whipsaw ETH + cooldown)
 
 A pedido do Lucas ("vamos resolver essa pendência" + "configurar o watchdog
@@ -2485,6 +2730,15 @@ desde 19:29Z sem `signal_approved` correspondente) — cheque se houve
 `signal_approved` no mesmo ciclo antes de assumir que foi a primeira causa.
 
 ## Testes (em `tests/`)
+
+**Atualização 28-29/07/2026 (sessão perp)**: contagem CONFIRMADA mais
+recente é **288/288** (280 `test_smoke.py` + 8 `test_ciclo.py`) — seção 30
+nova (10 sub-testes, fechamento auditado em perp + cancelamento de ordem
+órfã, bug #49). Existe uma seção 31 A MAIS (9 sub-testes, trailing real em
+perp) **já escrita mas NUNCA RODADA** — ver "PRÓXIMA AÇÃO" no topo do
+arquivo antes de considerar qualquer contagem abaixo desta atual. O resto
+desta seção (contagens antigas, 165/199/265 etc.) é histórico — não
+reflete o estado atual do arquivo de testes.
 
 `tests/test_smoke.py` (165 checks — 156 + 9 novos das seções 24-25,
 CONFIRMADOS verdes numa rodada completa com o motor parado (ver bug #31/#32

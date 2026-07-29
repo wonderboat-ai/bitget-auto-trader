@@ -1,16 +1,25 @@
-"""Estado local do alvo de take-profit em posições SPOT.
+"""Estado local de posições protegidas — spot E perp (nome/arquivo herdados
+de quando isto só existia pra spot; não renomeado pra não perder o rastreio
+de posições já persistidas ao vivo, ver comentário em _resolve_state_path).
 
-Só existe por causa de uma limitação real da Bybit: em spot, a ordem
+Origem SPOT: por causa de uma limitação real da Bybit, em spot a ordem
 condicional do stop OCUPA o saldo-base na colocação (ver executor.py) e não
 há OCO — colocar uma segunda condicional (o TP) como ordem na exchange seria
 sempre rejeitada por saldo insuficiente. A saída lucrativa em spot passa a
 ser SOFTWARE: o engine confere o preço a cada ciclo e, ao atingir o alvo,
-cancela o stop e vende a mercado (ver engine.py:_check_spot_exits).
+cancela o stop e vende a mercado (ver engine.py:_check_spot_exits). O STOP
+em si nunca depende deste arquivo em spot — é sempre uma ordem real na
+exchange, ativa mesmo se o engine cair.
 
-O STOP em si nunca depende deste arquivo — é sempre uma ordem real na
-exchange, ativa mesmo se o engine cair. Perder este estado só custa a
-OPORTUNIDADE de realizar lucro automaticamente, nunca a proteção contra perda.
-"""
+Estendido pra PERP em 28/07/2026 (Lucas religou perp/short em produção pela
+primeira vez): em perp, TANTO o stop quanto o TP já são ordens reais na
+exchange desde sempre (sem OCO nativo entre elas) — o problema aqui não é
+"como realizar lucro", é que nada detectava quando uma das duas disparava:
+nenhum trade_closed era auditado, e a ordem IRMÃ que não disparou ficava
+órfã e ativa, podendo executar contra uma posição futura não relacionada no
+mesmo símbolo. Ver engine.py:_check_perp_exits/_handle_perp_position_closed.
+`tp_id` (novo campo) só é usado por este caminho perp — spot nunca arma TP
+como ordem real, então fica sempre None lá."""
 from __future__ import annotations
 
 import json
@@ -92,7 +101,8 @@ def _save(protections: dict[str, dict]) -> None:
 
 def set_protection(symbol: str, *, entry_price: float, take_profit: float,
                     stop_price: float, size: float | None = None,
-                    stop_id: str | None = None, profile: str | None = None,
+                    stop_id: str | None = None, tp_id: str | None = None,
+                    side: str = "long", profile: str | None = None,
                     trailing: bool = False, trail_distance: float | None = None,
                     peak_price: float | None = None) -> None:
     protections = load()
@@ -100,6 +110,14 @@ def set_protection(symbol: str, *, entry_price: float, take_profit: float,
         "entry_price": entry_price,
         "take_profit": take_profit,
         "stop_price": stop_price,
+        # Direção da posição (28/07/2026, "long"/"short") — default "long"
+        # por compatibilidade (spot só teve long até hoje; toda entrada
+        # perp anterior a este campo também era long, já que short só foi
+        # habilitado em perp na mesma sessão deste campo). Necessário pro
+        # PnL e pro trailing terem o SINAL certo em short (preço caindo é
+        # lucro, o stop desce em vez de subir) — sem isto,
+        # _handle_perp_position_closed calcularia PnL invertido pra short.
+        "side": side,
         # Tamanho REALMENTE protegido nesta entrada (protect_size do
         # executor) — sem isto, a saída de TP não tinha como distinguir a
         # posição do bot de saldo alheio da mesma moeda-base na carteira, e
@@ -112,6 +130,11 @@ def set_protection(symbol: str, *, entry_price: float, take_profit: float,
         # Sem isto não dá para distinguir "stop confirmado" de "sumiu por
         # algum motivo desconhecido".
         "stop_id": stop_id,
+        # ID da ordem condicional do TP na exchange (28/07/2026, só usado em
+        # PERP — spot nunca arma TP como ordem real, fica sempre None lá).
+        # Permite ao caminho perp confirmar qual das DUAS ordens reais
+        # (stop ou TP) foi a que disparou, e cancelar a irmã órfã.
+        "tp_id": tp_id,
         # Perfil que ABRIU a posição (20/07/2026): a saída por sinal precisa
         # consultar a estratégia/timeframe do perfil certo. Posições antigas
         # sem o campo (arquivo pré-existente) simplesmente não têm saída por
@@ -169,9 +192,21 @@ def backfill_from_audit(symbol: str) -> dict | None:
         "take_profit": last.get("take_profit"),
         "stop_price": last.get("stop_price") or 0.0,
         "size": last.get("protect_size"),
+        # side (28/07/2026): order_executed audita o lado da ORDEM de
+        # entrada ("buy"/"sell", já existia desde sempre) — deriva a
+        # direção da POSIÇÃO a partir dele. Só "sell" explícito vira
+        # "short"; qualquer outra coisa (incl. ausente) cai em "long" —
+        # mesmo default seguro de set_protection (spot/perp pré-short só
+        # tinham long; nunca inverter o sinal do PnL por engano num campo
+        # ausente).
+        "side": "short" if last.get("side") == "sell" else "long",
         # stop_id: usado por engine.py pra confirmar o fill real do stop
         # quando a posição some sem passar pelo TP por software (18/07/2026).
         "stop_id": last.get("stop_id"),
+        # tp_id (28/07/2026): só populado em PERP (spot nunca arma TP real).
+        # Necessário pro backfill de uma posição perp aberta ANTES deste
+        # campo existir/ser persistido continuar detectável no fechamento.
+        "tp_id": last.get("tp_id"),
         # entry_id: só serve pra RECUPERAR o entry_price quando ele veio null
         # na trilha (trades anteriores ao fix #17) — engine.py consulta a
         # exchange sob demanda (_resolve_entry_price); este módulo continua

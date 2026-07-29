@@ -421,6 +421,349 @@ class Engine:
                 audit("symbol_cycle_error", symbol=symbol,
                       profile="take_profit_exit", error=str(exc))
 
+    # ---------------------- Fechamento auditado (PERP) ----------------------
+    def _handle_perp_position_closed(self, symbol: str, protection: dict) -> None:
+        """Equivalente perp de _handle_spot_position_closed (28/07/2026,
+        primeira vez que perp operou de verdade neste projeto — bloqueio de
+        compliance impedia isto desde 15/07). Diferença chave: em perp o
+        STOP e o TP são SEMPRE ordens reais na exchange (sem o problema de
+        saldo ocupado do spot) — não existe "saída por software" a construir
+        aqui, só: (1) confirmar qual das duas ordens disparou, (2) auditar
+        trade_closed com o fill real, (3) alimentar o cooldown por símbolo,
+        (4) cancelar a ordem IRMÃ que ficou órfã (Bybit não tem OCO nativo
+        entre duas condicionais criadas separadamente — achado ao vivo: uma
+        ordem de TP órfã de uma entrada anterior ficou ativa na exchange
+        depois do stop dela disparar, podia executar contra uma posição
+        NOVA e não relacionada se o preço voltasse a subir até o alvo velho)."""
+        if not protection:
+            return
+
+        entry_price = protection.get("entry_price") or 0.0
+        size = protection.get("size")
+        stop_id = protection.get("stop_id")
+        tp_id = protection.get("tp_id")
+        # side (28/07/2026): default "long" cobre proteções persistidas
+        # antes deste campo existir (nunca havia short em perp até hoje).
+        side = protection.get("side") or "long"
+
+        exit_price = None
+        exit_source = "unknown"
+        reason = "external_close_unconfirmed"
+        filled_id = None
+
+        # Confere as DUAS ordens — qualquer uma pode ter sido a que disparou.
+        # "if fill_price" (não "is None"): average/price podem vir 0 num
+        # status=closed+filled>0 legítimo — 0 não é fill confirmado, é dado
+        # ausente disfarçado (mesma classe de guard de
+        # _handle_spot_position_closed).
+        for order_id, candidate_reason, price_source in (
+            (stop_id, "stop_loss", "stop_order_fill"),
+            (tp_id, "take_profit", "tp_order_fill"),
+        ):
+            if not order_id:
+                continue
+            try:
+                order = self.client.fetch_order(order_id, symbol)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Sem confirmação da ordem %s (%s) de %s: %s",
+                            candidate_reason, order_id, symbol, exc)
+                continue
+            if order.get("status") == "closed" and float(order.get("filled") or 0) > 0:
+                fill_price = order.get("average") or order.get("price")
+                if fill_price:
+                    exit_price = float(fill_price)
+                    exit_source = price_source
+                    reason = candidate_reason
+                    filled_qty = float(order.get("filled"))
+                    if size is None or filled_qty < size:
+                        size = filled_qty
+                    filled_id = order_id
+                    break
+
+        if exit_price is None:
+            # Nem stop nem TP confirmam fill (fechamento manual, liquidação,
+            # ou falha ao consultar as duas) — melhor aproximação disponível
+            # é o alvo do stop, nunca o preço de ticker atual (mesma
+            # convenção do caminho spot).
+            exit_price = protection.get("stop_price") or 0.0
+            exit_source = "stop_price_target_approx"
+        exit_price = float(exit_price)
+
+        # entry_price/exit_price/size no guard (não só entry_price): mesma
+        # classe de bug "0 tratado como confirmado" já corrigida 2x no
+        # caminho spot. Sinal do PnL depende da DIREÇÃO (28/07/2026, achado
+        # ao ligar short em perp): long lucra com o preço subindo, short
+        # lucra com o preço caindo — a fórmula fixa "(exit - entry) * size"
+        # dava PnL com sinal invertido pra toda posição short.
+        pnl_usdt = None
+        if entry_price and exit_price and size is not None:
+            pnl_usdt = ((exit_price - entry_price) * size if side == "long"
+                        else (entry_price - exit_price) * size)
+
+        audit("trade_closed", symbol=symbol, side=side, entry_price=entry_price or None,
+              exit_price=exit_price, size=size, pnl_usdt=pnl_usdt, reason=reason,
+              exit_price_source=exit_source)
+        log.info("Posição perp %s fechada (%s, exit~%.2f)", symbol, reason, exit_price)
+        # Cooldown por símbolo: mesma regra do caminho spot — só stop_loss
+        # CONFIRMADO incrementa a sequência; qualquer outro motivo (incl.
+        # take_profit e external_close_unconfirmed) reseta.
+        self.risk.record_trade_close(symbol, reason)
+
+        # Cancela a ordem IRMÃ órfã — só quando confirmou COM CERTEZA qual
+        # das duas disparou (filled_id setado). Sem essa certeza (exit_source
+        # == "stop_price_target_approx"), cancelar às cegas por symbol
+        # poderia derrubar a proteção de uma posição NOVA já reaberta no
+        # mesmo símbolo nesse meio-tempo — mesma janela de risco já aceita e
+        # documentada no caminho spot (_check_spot_exits, limitação 18/07).
+        if filled_id is not None:
+            orphan_id = tp_id if filled_id == stop_id else stop_id
+            if orphan_id:
+                try:
+                    self.client.cancel_order(orphan_id, symbol)
+                    log.info("Ordem irmã órfã cancelada em %s (%s)", symbol, orphan_id)
+                except Exception as exc:  # noqa: BLE001
+                    # Não escala como falha de proteção: a ordem órfã só
+                    # executaria se o preço alcançasse o alvo antigo — risco
+                    # real, mas não imediato, e a posição (se houver alguma
+                    # nova no símbolo) tem seu próprio stop/TP intactos.
+                    # Falha de cancelamento comum: a ordem já não existe mais
+                    # (foi cancelada/expirou por conta própria) — não é
+                    # necessariamente um problema.
+                    log.warning("Falha ao cancelar ordem irmã órfã %s de %s: %s",
+                                orphan_id, symbol, exc)
+                    audit("perp_orphan_order_cancel_failed", symbol=symbol,
+                          orphan_order_id=orphan_id, error=str(exc))
+
+    def _check_perp_exits(self) -> None:
+        """A cada ciclo, reconcilia posições PERP rastreadas que sumiram da
+        exchange (28/07/2026). Roda ANTES do kill switch (mesma filosofia do
+        stop/_check_spot_exits — decisão #B: isto é limpeza/saída, nunca uma
+        entrada nova, então nunca é bloqueado). dry_run nunca chega a ter
+        nada em `protections` pra perp (executor retorna antes de qualquer
+        persistência em DRY_RUN) — guard aqui é defesa em profundidade, não
+        estritamente necessária hoje, mesmo padrão paranoico do resto do
+        arquivo."""
+        if self.market_type == "spot" or self.dry_run:
+            return
+
+        protections = protection_state.load()
+
+        for symbol in list(protections):
+            if symbol in self._open_symbols:
+                continue
+            try:
+                self._handle_perp_position_closed(symbol, protections[symbol])
+            except Exception as exc:  # noqa: BLE001
+                log.exception("Erro apurando fechamento perp de %s: %s", symbol, exc)
+                audit("symbol_cycle_error", symbol=symbol,
+                      profile="position_closed_reconcile", error=str(exc))
+            finally:
+                try:
+                    protection_state.clear_protection(symbol)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Falha ao limpar proteção perp de %s pós-fechamento: %s",
+                                symbol, exc)
+
+        # Backfill na primeira vez que uma posição perp aberta é vista sem
+        # registro em protection_state — cobre posições abertas ANTES deste
+        # fix existir (a primeira entrada perp real do projeto, 28/07/2026,
+        # já estava aberta quando este código foi escrito) ou perda do
+        # arquivo de estado. Sem isto, o fechamento delas nunca seria
+        # detectado pelo loop acima (nada rastreado pra reconciliar).
+        for symbol in list(self._open_symbols):
+            if symbol in protections:
+                continue
+            backfilled = protection_state.backfill_from_audit(symbol)
+            if not backfilled:
+                continue
+            try:
+                protection_state.set_protection(
+                    symbol, entry_price=backfilled["entry_price"],
+                    take_profit=backfilled.get("take_profit"),
+                    stop_price=backfilled.get("stop_price") or 0.0,
+                    size=backfilled.get("size"), stop_id=backfilled.get("stop_id"),
+                    tp_id=backfilled.get("tp_id"), side=backfilled.get("side") or "long",
+                    profile=backfilled.get("profile"),
+                    trailing=bool(backfilled.get("trailing")),
+                    trail_distance=backfilled.get("trail_distance"),
+                    peak_price=backfilled.get("peak_price"))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Falha ao persistir backfill perp de %s: %s", symbol, exc)
+
+        # Trailing (28/07/2026): para posições perp RASTREADAS que continuam
+        # abertas, move o stop REAL conforme o preço avança a favor — mesma
+        # filosofia do trailing spot, mecânica mais simples (perp não
+        # precisa cancelar/vender pra liberar saldo, só cancelar+recriar a
+        # ordem do stop; o TP nunca é tocado aqui, fica intacto o tempo
+        # todo). Recarrega do disco: o backfill acima pode ter acabado de
+        # escrever entradas novas que `protections` (lido no topo da função)
+        # ainda não reflete.
+        fresh_protections = protection_state.load()
+        for symbol in list(self._open_symbols):
+            protection = fresh_protections.get(symbol)
+            if not protection or not protection.get("trailing") or not protection.get("trail_distance"):
+                continue
+            try:
+                price = self.client.fetch_ticker(symbol).get("last")
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Sem preço pra checar trailing perp de %s: %s", symbol, exc)
+                continue
+            if price is None:
+                continue
+            price = float(price)
+            if not math.isfinite(price):
+                continue
+            try:
+                self._update_perp_trailing_stop(symbol, protection, price)
+            except Exception as exc:  # noqa: BLE001
+                log.exception("Erro no trailing perp de %s: %s", symbol, exc)
+                audit("symbol_cycle_error", symbol=symbol,
+                      profile="perp_trailing", error=str(exc))
+
+    def _update_perp_trailing_stop(self, symbol: str, protection: dict, price: float) -> None:
+        """Move o stop REAL de uma posição perp com trailing ativo
+        (28/07/2026). Diferente do spot (_update_trailing_stop): perp nunca
+        tem o problema de saldo ocupado — mover é sempre cancelar a ordem de
+        STOP antiga (por id) e criar outra; o TP (se houver) nunca é tocado,
+        fica intacto o tempo todo. Suporta LONG e SHORT — a direção inverte
+        a lógica inteira (pico vira fundo, sobe vira desce)."""
+        side = protection.get("side") or "long"
+        trail = float(protection["trail_distance"])
+        stop_id = protection.get("stop_id")
+        tp_id = protection.get("tp_id")
+        size = protection.get("size")
+        cur_stop = float(protection.get("stop_price") or 0.0)
+        stored_peak = float(protection.get("peak_price") or protection.get("entry_price") or 0.0)
+
+        if side == "long":
+            peak = max(stored_peak, price)
+            new_stop = peak - trail
+            breached = price <= new_stop
+            improved = new_stop > cur_stop + price * TRAIL_MIN_STEP_PCT
+        else:  # short: "peak" aqui é o FUNDO (menor preço visto desde a entrada)
+            peak = min(stored_peak, price)
+            new_stop = peak + trail
+            breached = price >= new_stop
+            improved = new_stop < cur_stop - price * TRAIL_MIN_STEP_PCT
+
+        def _persist_peak_only(stop_price: float) -> None:
+            if peak == stored_peak:
+                return
+            try:
+                protection_state.set_protection(
+                    symbol, entry_price=protection.get("entry_price") or 0.0,
+                    take_profit=protection.get("take_profit"), stop_price=stop_price,
+                    size=size, stop_id=stop_id, tp_id=tp_id, side=side,
+                    profile=protection.get("profile"), trailing=True,
+                    trail_distance=trail, peak_price=peak)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Falha ao persistir pico do trailing perp de %s: %s", symbol, exc)
+
+        if breached:
+            # Nível trailed já rompido: perp SEMPRE tem stop real na
+            # exchange (ao contrário do spot, que dispara por SOFTWARE
+            # aqui) — o disparo é responsabilidade da própria ordem/
+            # exchange. _check_perp_exits detecta o fechamento no próximo
+            # ciclo via _open_symbols, como sempre. Só persiste o pico.
+            _persist_peak_only(cur_stop)
+            return
+        if not improved:
+            _persist_peak_only(cur_stop)
+            return
+        if not stop_id or size is None or size <= 0:
+            log.warning("Trailing perp de %s sem stop_id/size rastreado — move abortado", symbol)
+            return
+
+        # Confirma o gatilho REAL vigente antes de mover: o arquivo pode
+        # estar stale (persistência de um move anterior falhou, ou o
+        # processo caiu entre cancelar e persistir) — mover com base no
+        # valor velho rebaixaria (long) ou subiria (short) uma proteção
+        # real já melhor. Mesmo raciocínio do trailing spot (20/07).
+        try:
+            real_stop = self.client.fetch_order(stop_id, symbol)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Sem leitura do stop real de %s (%s) — trailing move "
+                        "adiado pro próximo ciclo", symbol, exc)
+            return
+        if real_stop.get("status") == "closed" and float(real_stop.get("filled") or 0) > 0:
+            # Já disparou — não é mais trabalho deste método; o próximo
+            # ciclo de _check_perp_exits reconcilia via _open_symbols.
+            return
+        real_trigger = real_stop.get("triggerPrice") or real_stop.get("stopPrice") or \
+            (real_stop.get("info") or {}).get("triggerPrice")
+        if real_trigger:
+            real_trigger = float(real_trigger)
+            stale = (side == "long" and real_trigger > cur_stop) or \
+                    (side == "short" and real_trigger < cur_stop)
+            if stale:
+                log.warning("Trailing perp de %s: arquivo stale (stop %.2f vs "
+                            "gatilho real %.2f) — curando registro",
+                            symbol, cur_stop, real_trigger)
+                cur_stop = real_trigger
+                improved = (new_stop > cur_stop + price * TRAIL_MIN_STEP_PCT if side == "long"
+                            else new_stop < cur_stop - price * TRAIL_MIN_STEP_PCT)
+                if not improved:
+                    _persist_peak_only(cur_stop)
+                    return
+
+        try:
+            self.client.cancel_order(stop_id, symbol)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("cancel_order do stop antigo falhou em %s (%s) — trailing "
+                        "move abortado (pode já ter disparado): %s", symbol, stop_id, exc)
+            return
+
+        # side ORIGEM da posição (não o lado de fechamento) — set_stop_loss
+        # inverte internamente (bybit_client.py: close_side = oposto).
+        origin_side = "buy" if side == "long" else "sell"
+        try:
+            new_order = self.client.set_stop_loss(symbol, origin_side, size, new_stop)
+        except Exception as exc:  # noqa: BLE001
+            log.error("Novo stop falhou em %s (%.2f) após cancelar o antigo — "
+                      "re-armando no preço antigo (%.2f): %s",
+                      symbol, new_stop, cur_stop, exc)
+            try:
+                old_order = self.client.set_stop_loss(symbol, origin_side, size, cur_stop)
+                audit("trailing_move_failed_stop_rearmed", symbol=symbol,
+                      stop_price=cur_stop, error=str(exc), stop_id=old_order.get("id"))
+                try:
+                    protection_state.set_protection(
+                        symbol, entry_price=protection.get("entry_price") or 0.0,
+                        take_profit=protection.get("take_profit"), stop_price=cur_stop,
+                        size=size, stop_id=old_order.get("id"), tp_id=tp_id, side=side,
+                        profile=protection.get("profile"), trailing=True,
+                        trail_distance=trail, peak_price=peak)
+                except Exception as save_exc:  # noqa: BLE001
+                    log.warning("Stop antigo re-armado mas falha ao persistir "
+                                "novo stop_id de %s: %s", symbol, save_exc)
+            except Exception as rearm_exc:  # noqa: BLE001
+                log.critical("FALHA AO RE-ARMAR STOP de %s após trailing move "
+                             "falhar — POSIÇÃO SEM STOP NENHUM, intervir "
+                             "manualmente: %s", symbol, rearm_exc)
+                audit("trailing_rearm_stop_failed", symbol=symbol,
+                      move_error=str(exc), rearm_error=str(rearm_exc))
+            return
+
+        try:
+            audit("trailing_stop_moved", symbol=symbol, side=side, old_stop=cur_stop,
+                  new_stop=new_stop, peak_price=peak, size=size,
+                  stop_id=new_order.get("id"))
+            log.info("TRAILING (perp) moveu stop de %s: %.2f -> %.2f (pico %.2f)",
+                     symbol, cur_stop, new_stop, peak)
+        except Exception as audit_exc:  # noqa: BLE001
+            log.critical("Trailing (perp) moveu o stop de %s mas FALHA ao "
+                         "auditar (trilha pode não refletir): %s", symbol, audit_exc)
+        try:
+            protection_state.set_protection(
+                symbol, entry_price=protection.get("entry_price") or 0.0,
+                take_profit=protection.get("take_profit"), stop_price=new_stop,
+                size=size, stop_id=new_order.get("id"), tp_id=tp_id, side=side,
+                profile=protection.get("profile"), trailing=True,
+                trail_distance=trail, peak_price=peak)
+        except Exception as save_exc:  # noqa: BLE001
+            log.warning("Trailing (perp) moveu o stop mas falhou ao persistir "
+                        "novo stop_id de %s: %s", symbol, save_exc)
+
     def _check_signal_exit(self, symbol: str, protection: dict) -> str | None:
         """Consulta a estratégia do perfil que ABRIU a posição pra saber se
         ela manda fechar agora (20/07/2026). Devolve o racional ou None.
@@ -1200,10 +1543,13 @@ class Engine:
         state = self._portfolio_state()
         self.risk.check_portfolio_health(state)
 
-        # TP em spot roda mesmo com kill switch ativo: não é entrada nova,
-        # é saída de uma posição já existente (mesma lógica do stop, que
-        # também nunca é bloqueado pelo kill switch — decisão #B de 16/07).
+        # TP em spot / fechamento auditado em perp rodam mesmo com kill
+        # switch ativo: não são entrada nova, são saída/limpeza de posição
+        # já existente (mesma lógica do stop, que também nunca é bloqueado
+        # pelo kill switch — decisão #B de 16/07). Cada método se auto-gate
+        # pelo market_type real — nunca os dois fazem trabalho no mesmo boot.
         self._check_spot_exits()
+        self._check_perp_exits()
 
         if self.risk.halted:
             log.error("Engine pausado pelo kill switch. Aguardando reset manual.")
