@@ -205,6 +205,21 @@ ok("estrategia gera LONG no cenario alta+pullback", s.direction == Direction.LON
 # ---------- 5. engine: isolamento de erro + exclusividade por símbolo ----------
 import src.engine as engine_mod  # noqa: E402
 
+# A suíte inteira daqui pra baixo é majoritariamente sobre mecânica EXCLUSIVA
+# de spot (TP por software em _check_spot_exits, executor spot-only,
+# trailing/exit-por-sinal calibrados pro executor spot) — dezenas de
+# `Engine()` construídas ao longo do arquivo dependiam implicitamente de
+# config/risk_config.yaml real estar em market.type=spot. Isso valia de
+# graça até 27/07/2026; desde 28/07/2026 (Lucas religou perp/short em
+# produção) o YAML real é "perp". Em vez de decorar cada instância
+# individualmente, força "spot" aqui, uma vez, pra TODA Engine() construída
+# a partir daqui — decoupled do que o YAML ao vivo disser. Seções que
+# precisam testar "perp" explicitamente (ex.: prova de que
+# _check_spot_exits vira no-op) fazem seu próprio override PONTUAL depois
+# da construção (`eng_x.market_type = "perp"`), que sempre vence por rodar
+# depois deste monkeypatch.
+engine_mod.get_market_type = lambda cfg: "spot"
+
 
 class FakeEthQuebrado:
     is_testnet = True
@@ -528,12 +543,16 @@ protection_state.set_protection("BTC/USDT", entry_price=100.0, take_profit=110.0
 engine_mod.BybitClient = FakeSpotExit
 FakeSpotExit.PRICE = 112.0  # acima do alvo
 eng_dry = engine_mod.Engine(dry_run=True)
-# Pré-requisito de TODA a seção 12: se config/risk_config.yaml algum dia sair
-# de market.type=spot, _check_spot_exits() vira no-op de propósito e a
-# maioria das asserções abaixo passaria por acidente (achado da 2ª rodada de
-# revisão adversarial de 17/07) — falha aqui, alto e claro, em vez de silêncio.
-ok("pre-requisito: risk_config.yaml real esta em market.type=spot",
-   eng_dry.market_type == "spot", f"market_type={eng_dry.market_type}")
+# Toda a seção 12 testa o caminho SPOT de _check_spot_exits() (TP por
+# software) — sem isto, market.type=perp faria o método virar no-op de
+# propósito e a maioria das asserções abaixo passaria por acidente (achado
+# da 2ª rodada de revisão adversarial de 17/07). Até 27/07/2026 isso valia
+# de graça porque o YAML real vivia em spot; desde 28/07/2026 (Lucas religou
+# perp/short em produção) o YAML real é "perp" — força o cenário aqui,
+# mesmo precedente já usado na seção 13 (`eng_tp.market_type = "perp"`, mais
+# abaixo), pra este teste continuar cobrindo o mecanismo spot-only
+# independente do que o YAML ao vivo disser.
+eng_dry.market_type = "spot"
 eng_dry._open_symbols = {"BTC/USDT"}
 eng_dry._check_spot_exits()
 ok("DRY_RUN: nenhuma chamada real a exchange (nem cancel_all nem create_order)",
@@ -552,6 +571,13 @@ protection_state.set_protection("BTC/USDT", entry_price=100.0, take_profit=110.0
                                 stop_price=95.0, size=0.066047)
 FakeSpotExit.FREE_BASE = 0.066047
 eng_tp = engine_mod.Engine(dry_run=False)
+# Seções 12b-12d testam o caminho SPOT de _check_spot_exits() (TP por
+# software) — mesmo motivo/mesmo precedente da seção 12a (ver acima) e da
+# seção 13 mais abaixo (`eng_tp.market_type = "perp"`, que reusa este MESMO
+# objeto pra provar o no-op no sentido contrário). Desde 28/07/2026 o YAML
+# real é "perp"; força "spot" aqui pra estas seções continuarem exercitando
+# o mecanismo, independente do YAML ao vivo.
+eng_tp.market_type = "spot"
 eng_tp._open_symbols = {"BTC/USDT"}
 
 FakeSpotExit.PRICE = 105.0  # abaixo do alvo -> não deve fechar
@@ -608,6 +634,11 @@ class FakeSpotExitNaN(FakeSpotExit):
 
 engine_mod.BybitClient = FakeSpotExitNaN
 eng_nan = engine_mod.Engine(dry_run=False)
+# Sem isto, com o YAML real em "perp", _check_spot_exits() vira no-op e a
+# asserção abaixo passaria por acidente (nenhuma chamada acontece de
+# qualquer jeito) — não provaria o guard de NaN de verdade. Mesmo motivo
+# das seções 12a/12b-d acima.
+eng_nan.market_type = "spot"
 eng_nan._open_symbols = {"BTC/USDT"}
 eng_nan._check_spot_exits()
 ok("preco NaN do ticker NAO dispara venda (guard math.isfinite)",
@@ -3071,13 +3102,15 @@ ok("snapshot_to_payload: contexto vazio ja inclui a chave 'derivatives' (consist
 # min_conviction do Engine (não fica preso nos defaults do construtor) ----------
 engine_mod.BybitClient = FakeEthQuebrado
 eng28 = engine_mod.Engine(dry_run=True)
-# Pré-requisito explícito (mesmo padrão da seção 12, linha ~513): sem isto,
-# a asserção de system_prompt abaixo passaria por acidente mesmo se
-# market_type tivesse regredido pra 'perp' — achado da revisão de 22/07/2026
-# (o teste original comparava eng28.market_type contra ele mesmo, nunca
-# contra o literal "spot").
-ok("pre-requisito 28c: risk_config.yaml real esta em market.type=spot",
-   eng28.market_type == "spot", f"market_type={eng28.market_type}")
+# Esta seção prova que Engine._build_strategy passa o market_type REAL pro
+# LLMStrategy comparando contra o literal "spot", nunca contra ele mesmo
+# (achado da revisão de 22/07/2026). Até 27/07/2026 isso valia de graça
+# porque o YAML real vivia em spot; desde 28/07/2026 (Lucas religou
+# perp/short em produção) o YAML real é "perp" — força "spot" aqui, mesmo
+# padrão já usado na seção 12 e no precedente da seção 13
+# (`eng_tp.market_type = "perp"`), pra manter a asserção literal e
+# desacoplada do que o YAML ao vivo disser.
+eng28.market_type = "spot"
 
 # min_conviction: valor DISTINTO do default da classe (0.6) — um valor igual
 # ao default não provaria que o wiring funciona (passaria mesmo se
@@ -3199,6 +3232,547 @@ ok("secao 29: prova de ponta a ponta ja coberta pela secao 20g (reexecutar "
    len(trail_trades) >= 1 and any(t.exit_reason == "take_profit" for t in trail_trades)
    and any(t.exit_reason == "trailing_stop" for t in trail_trades),
    f"exit_reasons={[t.exit_reason for t in trail_trades]}")
+
+
+# ---------- 30. perp: fechamento auditado + cancelamento da ordem irmã órfã
+# (28/07/2026, a pedido do Lucas — "corrige o fechamento auditado pro perp").
+# Contexto: Lucas religou perp/short em produção pela primeira vez desde o
+# bloqueio de compliance de 15/07. A 1ª entrada real fechou pelo stop (fill
+# confirmado direto na exchange) e NADA foi auditado — nem trade_closed, nem
+# cooldown, nem o TP órfão da entrada anterior foi cancelado (ficou ativo,
+# podia executar contra uma posição nova não relacionada). Este mecanismo
+# nunca tinha sido exercitado ao vivo porque perp nunca operou de verdade
+# antes de hoje. ----------
+class FakePerpExit:
+    is_testnet = True
+    ORDER_RESPONSES: dict = {}
+    CANCEL_SHOULD_FAIL = False
+
+    def __init__(self, *a, **k):
+        self.calls = []
+
+    def fetch_order(self, order_id, symbol):
+        self.calls.append(("fetch_order", order_id, symbol))
+        return type(self).ORDER_RESPONSES.get(
+            order_id, {"id": order_id, "status": "open", "filled": 0.0,
+                       "average": None, "price": None})
+
+    def cancel_order(self, order_id, symbol):
+        self.calls.append(("cancel_order", order_id, symbol))
+        if FakePerpExit.CANCEL_SHOULD_FAIL:
+            raise RuntimeError("cancelamento rejeitado (simulado)")
+        return {"id": order_id, "status": "canceled"}
+
+
+# 30a. stop confirmado (filled>0) -> trade_closed reason=stop_loss com o fill
+# REAL, cooldown incrementado, TP irmão (ainda 'open') CANCELADO.
+AUDIT.unlink(missing_ok=True)
+protection_state.set_protection("BTC/USDT:USDT", entry_price=100.0, take_profit=110.0,
+                                stop_price=95.0, size=1.0,
+                                stop_id="stop-30a", tp_id="tp-30a")
+FakePerpExit.ORDER_RESPONSES = {
+    "stop-30a": {"id": "stop-30a", "status": "closed", "filled": 1.0,
+                 "average": 94.8, "price": 94.8},
+    "tp-30a": {"id": "tp-30a", "status": "open", "filled": 0.0,
+               "average": None, "price": None},
+}
+FakePerpExit.CANCEL_SHOULD_FAIL = False
+engine_mod.BybitClient = FakePerpExit
+eng30a = engine_mod.Engine(dry_run=False)
+eng30a.market_type = "perp"
+eng30a._open_symbols = set()
+eng30a._check_perp_exits()
+ev30a = [json.loads(l) for l in AUDIT.read_text(encoding="utf-8").splitlines()]
+tc30a = [e for e in ev30a if e["event"] == "trade_closed" and e["symbol"] == "BTC/USDT:USDT"]
+ok("perp: stop confirmado -> trade_closed com reason=stop_loss e fill REAL (nao o alvo)",
+   len(tc30a) == 1 and tc30a[0]["reason"] == "stop_loss"
+   and tc30a[0]["exit_price"] == 94.8 and tc30a[0]["exit_price_source"] == "stop_order_fill"
+   and abs(tc30a[0]["pnl_usdt"] - (94.8 - 100.0) * 1.0) < 1e-9, str(tc30a))
+cd30a = [e for e in ev30a if e["event"] == "cooldown_triggered" and e["symbol"] == "BTC/USDT:USDT"]
+ok("perp: stop confirmado aciona cooldown (mesma regra do stop em spot)", len(cd30a) == 1)
+ok("perp: ordem TP irmã (ainda open) foi CANCELADA", ("cancel_order", "tp-30a", "BTC/USDT:USDT") in eng30a.client.calls)
+ok("perp: proteção limpa após reconciliação", "BTC/USDT:USDT" not in protection_state.load())
+
+# 30b. TP confirmado (filled>0) -> trade_closed reason=take_profit, cooldown
+# RESETADO (nao incrementado), stop irmão CANCELADO.
+AUDIT.unlink(missing_ok=True)
+protection_state.set_protection("ETH/USDT:USDT", entry_price=1900.0, take_profit=1930.0,
+                                stop_price=1880.0, size=0.5,
+                                stop_id="stop-30b", tp_id="tp-30b")
+FakePerpExit.ORDER_RESPONSES = {
+    "stop-30b": {"id": "stop-30b", "status": "open", "filled": 0.0,
+                 "average": None, "price": None},
+    "tp-30b": {"id": "tp-30b", "status": "closed", "filled": 0.5,
+               "average": 1930.5, "price": 1930.5},
+}
+eng30b = engine_mod.Engine(dry_run=False)
+eng30b.market_type = "perp"
+eng30b._open_symbols = set()
+eng30b._check_perp_exits()
+ev30b = [json.loads(l) for l in AUDIT.read_text(encoding="utf-8").splitlines()]
+tc30b = [e for e in ev30b if e["event"] == "trade_closed" and e["symbol"] == "ETH/USDT:USDT"]
+ok("perp: TP confirmado -> trade_closed com reason=take_profit e fill REAL",
+   len(tc30b) == 1 and tc30b[0]["reason"] == "take_profit"
+   and tc30b[0]["exit_price"] == 1930.5 and tc30b[0]["exit_price_source"] == "tp_order_fill"
+   and abs(tc30b[0]["pnl_usdt"] - (1930.5 - 1900.0) * 0.5) < 1e-9, str(tc30b))
+ok("perp: ordem stop irmã (ainda open) foi CANCELADA", ("cancel_order", "stop-30b", "ETH/USDT:USDT") in eng30b.client.calls)
+
+# 30c. NENHUMA das duas confirma fechamento (fechamento manual/liquidação, ou
+# falha ao consultar) -> trade_closed aproximado (reason=
+# external_close_unconfirmed, exit_price=stop_price alvo), e NENHUM
+# cancelamento é tentado (sem certeza de qual disparou, cancelar às cegas
+# arriscaria derrubar a proteção de uma posição nova já reaberta).
+AUDIT.unlink(missing_ok=True)
+protection_state.set_protection("SOL/USDT:USDT", entry_price=150.0, take_profit=160.0,
+                                stop_price=140.0, size=2.0,
+                                stop_id="stop-30c", tp_id="tp-30c")
+FakePerpExit.ORDER_RESPONSES = {
+    "stop-30c": {"id": "stop-30c", "status": "open", "filled": 0.0,
+                 "average": None, "price": None},
+    "tp-30c": {"id": "tp-30c", "status": "open", "filled": 0.0,
+               "average": None, "price": None},
+}
+eng30c = engine_mod.Engine(dry_run=False)
+eng30c.market_type = "perp"
+eng30c._open_symbols = set()
+eng30c._check_perp_exits()
+ev30c = [json.loads(l) for l in AUDIT.read_text(encoding="utf-8").splitlines()]
+tc30c = [e for e in ev30c if e["event"] == "trade_closed" and e["symbol"] == "SOL/USDT:USDT"]
+ok("perp: nenhuma ordem confirma -> trade_closed aproximado (reason=external_close_unconfirmed)",
+   len(tc30c) == 1 and tc30c[0]["reason"] == "external_close_unconfirmed"
+   and tc30c[0]["exit_price"] == 140.0
+   and tc30c[0]["exit_price_source"] == "stop_price_target_approx", str(tc30c))
+ok("perp: SEM confirmacao de qual disparou, NENHUM cancelamento e tentado (evita derrubar posicao nova)",
+   not any(c[0] == "cancel_order" for c in eng30c.client.calls), str(eng30c.client.calls))
+
+# 30d. cancelamento da ordem órfã FALHA (ex.: ordem já não existe mais) -> não
+# escala como falha de proteção, audita perp_orphan_order_cancel_failed, e o
+# trade_closed principal já saiu normalmente antes disso.
+AUDIT.unlink(missing_ok=True)
+protection_state.set_protection("ADA/USDT:USDT", entry_price=0.5, take_profit=0.55,
+                                stop_price=0.45, size=100.0,
+                                stop_id="stop-30d", tp_id="tp-30d")
+FakePerpExit.ORDER_RESPONSES = {
+    "stop-30d": {"id": "stop-30d", "status": "closed", "filled": 100.0,
+                 "average": 0.44, "price": 0.44},
+    "tp-30d": {"id": "tp-30d", "status": "open", "filled": 0.0,
+               "average": None, "price": None},
+}
+FakePerpExit.CANCEL_SHOULD_FAIL = True
+eng30d = engine_mod.Engine(dry_run=False)
+eng30d.market_type = "perp"
+eng30d._open_symbols = set()
+try:
+    eng30d._check_perp_exits()
+    nao_propagou30d = True
+except Exception:
+    nao_propagou30d = False
+ok("perp: falha ao cancelar ordem orfa NAO derruba a reconciliacao", nao_propagou30d)
+ev30d = [json.loads(l) for l in AUDIT.read_text(encoding="utf-8").splitlines()]
+tc30d = [e for e in ev30d if e["event"] == "trade_closed" and e["symbol"] == "ADA/USDT:USDT"]
+ok("perp: trade_closed sai normalmente mesmo com o cancelamento da orfa falhando depois",
+   len(tc30d) == 1 and tc30d[0]["reason"] == "stop_loss")
+fail30d = [e for e in ev30d if e["event"] == "perp_orphan_order_cancel_failed"
+           and e["symbol"] == "ADA/USDT:USDT"]
+ok("perp: falha de cancelamento auditada (perp_orphan_order_cancel_failed)", len(fail30d) == 1)
+FakePerpExit.CANCEL_SHOULD_FAIL = False
+
+# 30e. backfill na primeira vez que uma posição perp é vista sem registro em
+# protection_state (cobre a posição perp real do Lucas, aberta ANTES deste
+# fix existir — sem isto, o fechamento dela nunca seria detectado).
+from src.logger import audit as _audit30  # noqa: E402
+AUDIT.unlink(missing_ok=True)
+_audit30("order_executed", symbol="XRP/USDT:USDT", side="buy", size=200.0,
+        protect_size=200.0, entry_price=0.6, stop_price=0.57, take_profit=0.66,
+        entry_id="entry-30e", stop_id="stop-30e", tp_id="tp-30e",
+        profile="daytrade", trailing=False, testnet=False)
+eng30e = engine_mod.Engine(dry_run=False)
+eng30e.market_type = "perp"
+eng30e._open_symbols = {"XRP/USDT:USDT"}  # AINDA aberta -> so backfill, sem reconciliar fechamento
+eng30e._check_perp_exits()
+backfilled30e = protection_state.load().get("XRP/USDT:USDT")
+ok("perp: posicao vista sem protecao e recuperada via backfill_from_audit (incl. tp_id)",
+   backfilled30e is not None and backfilled30e.get("stop_id") == "stop-30e"
+   and backfilled30e.get("tp_id") == "tp-30e" and backfilled30e.get("entry_price") == 0.6,
+   str(backfilled30e))
+# Agora ela fecha (some de _open_symbols) -> o ciclo seguinte reconcilia
+# normalmente usando o que acabou de ser backfilled.
+FakePerpExit.ORDER_RESPONSES = {
+    "stop-30e": {"id": "stop-30e", "status": "closed", "filled": 200.0,
+                 "average": 0.565, "price": 0.565},
+    "tp-30e": {"id": "tp-30e", "status": "open", "filled": 0.0,
+               "average": None, "price": None},
+}
+eng30e._open_symbols = set()
+eng30e._check_perp_exits()
+ev30e = [json.loads(l) for l in AUDIT.read_text(encoding="utf-8").splitlines()]
+tc30e = [e for e in ev30e if e["event"] == "trade_closed" and e["symbol"] == "XRP/USDT:USDT"]
+ok("perp: posicao backfilled fecha normalmente no ciclo seguinte (stop confirmado)",
+   len(tc30e) == 1 and tc30e[0]["reason"] == "stop_loss" and tc30e[0]["exit_price"] == 0.565)
+protection_state.clear_protection("XRP/USDT:USDT")
+
+# 30f. isolamento por símbolo: erro real na apuração de UM símbolo (size
+# corrompido no arquivo -> TypeError no cálculo de pnl_usdt, FORA do
+# try/except que só cobre a chamada fetch_order) não derruba o ciclo nem
+# impede o OUTRO símbolo de ser reconciliado (mesmo padrão de isolamento já
+# validado pro caminho spot, seção 12j).
+AUDIT.unlink(missing_ok=True)
+protection_state.set_protection("BAD/USDT:USDT", entry_price=1.0, take_profit=1.2,
+                                stop_price=0.9, size=10.0,
+                                stop_id="stop-bad-30f", tp_id=None)
+_protecoes30f = protection_state.load()
+_protecoes30f["BAD/USDT:USDT"]["size"] = "nao-e-numero"  # corrompe o arquivo direto
+protection_state._save(_protecoes30f)
+protection_state.set_protection("GOOD/USDT:USDT", entry_price=2.0, take_profit=2.4,
+                                stop_price=1.8, size=5.0,
+                                stop_id="stop-good-30f", tp_id=None)
+FakePerpExit.ORDER_RESPONSES = {
+    "stop-bad-30f": {"id": "stop-bad-30f", "status": "closed", "filled": 10.0,
+                     "average": 0.89, "price": 0.89},
+    "stop-good-30f": {"id": "stop-good-30f", "status": "closed", "filled": 5.0,
+                      "average": 1.79, "price": 1.79},
+}
+engine_mod.BybitClient = FakePerpExit
+eng30f = engine_mod.Engine(dry_run=False)
+eng30f.market_type = "perp"
+eng30f._open_symbols = set()
+try:
+    eng30f._check_perp_exits()
+    nao_propagou30f = True
+except Exception:
+    nao_propagou30f = False
+ok("perp: erro real num simbolo nao derruba o ciclo (isolamento)", nao_propagou30f)
+ev30f = [json.loads(l) for l in AUDIT.read_text(encoding="utf-8").splitlines()]
+err30f = [e for e in ev30f if e["event"] == "symbol_cycle_error" and e["symbol"] == "BAD/USDT:USDT"]
+ok("perp: erro no BAD auditado como symbol_cycle_error", len(err30f) == 1)
+tc30f_good = [e for e in ev30f if e["event"] == "trade_closed" and e["symbol"] == "GOOD/USDT:USDT"]
+ok("perp: GOOD processado normalmente apesar do erro no BAD (isolamento de verdade)",
+   len(tc30f_good) == 1 and tc30f_good[0]["reason"] == "stop_loss")
+ok("perp: protecao de AMBOS limpa mesmo assim (finally roda independente do resultado)",
+   "BAD/USDT:USDT" not in protection_state.load()
+   and "GOOD/USDT:USDT" not in protection_state.load())
+
+# 30g. spot/dry_run: _check_perp_exits() é no-op de propósito (não é o modo
+# ativo, ou não deveria tocar exchange fora de --live).
+AUDIT.unlink(missing_ok=True)
+engine_mod.BybitClient = FakePerpExit
+eng30g_spot = engine_mod.Engine(dry_run=False)
+eng30g_spot.market_type = "spot"
+protection_state.set_protection("NOOP1/USDT", entry_price=1.0, take_profit=1.1, stop_price=0.9)
+eng30g_spot._open_symbols = set()
+eng30g_spot._check_perp_exits()
+ok("perp: market_type=spot -> _check_perp_exits e no-op (nao mexe na protecao de spot)",
+   "NOOP1/USDT" in protection_state.load())
+protection_state.clear_protection("NOOP1/USDT")
+
+eng30g_dry = engine_mod.Engine(dry_run=True)
+eng30g_dry.market_type = "perp"
+protection_state.set_protection("NOOP2/USDT:USDT", entry_price=1.0, take_profit=1.1,
+                                stop_price=0.9, stop_id="stop-noop2", tp_id="tp-noop2")
+eng30g_dry._open_symbols = set()
+eng30g_dry._check_perp_exits()
+ok("perp: dry_run=True -> _check_perp_exits e no-op (defesa em profundidade)",
+   "NOOP2/USDT:USDT" in protection_state.load())
+protection_state.clear_protection("NOOP2/USDT:USDT")
+
+# 30h. executor: entrada REAL em perp persiste protection_state com tp_id
+# (wiring ponta a ponta — sem isto, nada da seção 30 teria dado real pra
+# reconciliar, já que a persistência acontece na ENTRADA, não no fechamento).
+class FakePerpEntry:
+    is_testnet = True
+
+    def __init__(self, *a, **k):
+        self.calls = []
+
+    def set_leverage(self, symbol, leverage):
+        self.calls.append(("set_leverage", leverage))
+
+    def create_order(self, symbol, side, amount, order_type="market", price=None, params=None):
+        self.calls.append(("create_order", side, amount))
+        return {"id": "entry-30h", "average": 100.0}
+
+    def fetch_order(self, order_id, symbol):
+        return {"id": order_id, "average": 100.0, "price": 100.0}
+
+    def set_stop_loss(self, symbol, side, amount, stop_price):
+        self.calls.append(("set_stop_loss", stop_price))
+        return {"id": "stop-30h"}
+
+    def set_take_profit(self, symbol, side, amount, tp_price):
+        self.calls.append(("set_take_profit", tp_price))
+        return {"id": "tp-30h"}
+
+    def amount_to_precision(self, symbol, amount):
+        return amount
+
+
+AUDIT.unlink(missing_ok=True)
+protection_state.clear_protection("PERPENTRY/USDT:USDT")
+sig30h = Signal(symbol="PERPENTRY/USDT:USDT", direction=Direction.LONG, conviction=0.8,
+                entry_price=100.0, stop_price=95.0, take_profit=110.0,
+                profile="daytrade", rationale="teste entrada perp")
+# PortfolioState PRÓPRIO (não o `state` global compartilhado, que outras
+# seções já mutaram ao longo do arquivo) — evita depender de estado residual.
+state30h = PortfolioState(equity_usdt=1000.0, day_start_equity=1000.0, peak_equity=1000.0,
+                          open_positions=0, total_notional=0.0, aggregate_risk_pct=0.0)
+d30h = RiskManager(cfg, environment="testnet").evaluate(sig30h, state30h, funding_rate=None, data_age_sec=0)
+ok("pre-requisito 30h: sinal de entrada perp aprovado (senao o resto do teste e vazio)",
+   d30h.approved, d30h.reason)
+Executor(FakePerpEntry(), dry_run=False, market_type="perp").execute(sig30h, d30h)
+prot30h = protection_state.load().get("PERPENTRY/USDT:USDT")
+ok("executor: entrada perp persiste protection_state com stop_id E tp_id (28/07)",
+   prot30h is not None and prot30h.get("stop_id") == "stop-30h"
+   and prot30h.get("tp_id") == "tp-30h" and prot30h.get("entry_price") == 100.0,
+   str(prot30h))
+ok("executor: entrada perp LONG persiste side='long'", prot30h.get("side") == "long", str(prot30h))
+protection_state.clear_protection("PERPENTRY/USDT:USDT")
+
+sig30h_short = Signal(symbol="PERPSHORT/USDT:USDT", direction=Direction.SHORT, conviction=0.8,
+                      entry_price=100.0, stop_price=105.0, take_profit=90.0,
+                      profile="daytrade", rationale="teste entrada perp short")
+d30h_short = RiskManager(cfg, environment="testnet").evaluate(
+    sig30h_short, state30h, funding_rate=None, data_age_sec=0)
+Executor(FakePerpEntry(), dry_run=False, market_type="perp").execute(sig30h_short, d30h_short)
+prot30h_short = protection_state.load().get("PERPSHORT/USDT:USDT")
+ok("executor: entrada perp SHORT persiste side='short'",
+   prot30h_short is not None and prot30h_short.get("side") == "short", str(prot30h_short))
+protection_state.clear_protection("PERPSHORT/USDT:USDT")
+engine_mod.BybitClient = FakeEthQuebrado
+
+# ---------- 31. perp: trailing stop MOVE de verdade (28/07/2026, a pedido do
+# Lucas — "corrige o trailing em perp também"). Diferente do spot
+# (_update_trailing_stop): perp nunca tem o problema de saldo ocupado —
+# mover é sempre cancelar a ordem de STOP antiga (por id) e criar outra; o
+# TP nunca é tocado. Suporta LONG e SHORT (mesmo achado que motivou side
+# em protection_state: short precisa do sinal invertido em tudo — pico vira
+# fundo, sobe vira desce). ----------
+class FakePerpTrailing(FakePerpExit):
+    SET_STOP_RESPONSES: list = []
+    CANCEL_SHOULD_FAIL = False
+
+    def set_stop_loss(self, symbol, side, amount, stop_price):
+        self.calls.append(("set_stop_loss", side, amount, stop_price))
+        if type(self).SET_STOP_RESPONSES:
+            resp = type(self).SET_STOP_RESPONSES.pop(0)
+            if isinstance(resp, Exception):
+                raise resp
+            return resp
+        return {"id": f"newstop-{len(self.calls)}"}
+
+    def cancel_order(self, order_id, symbol):
+        self.calls.append(("cancel_order", order_id, symbol))
+        if type(self).CANCEL_SHOULD_FAIL:
+            raise RuntimeError("cancelamento do stop antigo falhou (simulado)")
+        return {"id": order_id, "status": "canceled"}
+
+
+def _reset_fake_perp_trailing():
+    FakePerpTrailing.ORDER_RESPONSES = {}
+    FakePerpTrailing.SET_STOP_RESPONSES = []
+    FakePerpTrailing.CANCEL_SHOULD_FAIL = False
+
+
+engine_mod.BybitClient = FakePerpTrailing
+
+
+def _eng31():
+    e = engine_mod.Engine(dry_run=False)
+    e.market_type = "perp"
+    return e
+
+
+# 31a. LONG: preço avança o suficiente -> stop sobe de verdade (cancela o
+# antigo, arma um novo), pico atualizado, protection_state persistida.
+_reset_fake_perp_trailing()
+AUDIT.unlink(missing_ok=True)
+prot31a = {"entry_price": 100.0, "take_profit": 130.0, "stop_price": 95.0,
+          "size": 2.0, "stop_id": "stop-31a", "tp_id": "tp-31a", "side": "long",
+          "profile": "daytrade", "trailing": True, "trail_distance": 5.0,
+          "peak_price": 100.0}
+FakePerpTrailing.ORDER_RESPONSES = {
+    "stop-31a": {"id": "stop-31a", "status": "open", "filled": 0.0,
+                "triggerPrice": "95.0"},
+}
+eng31a = _eng31()
+eng31a._update_perp_trailing_stop("BTC/USDT:USDT", prot31a, 110.0)
+ok("perp trailing LONG: cancela o stop antigo", ("cancel_order", "stop-31a", "BTC/USDT:USDT") in eng31a.client.calls)
+ok("perp trailing LONG: arma o novo stop no preco certo (peak-trail = 110-5=105)",
+   any(c[0] == "set_stop_loss" and c[1] == "buy" and abs(c[3] - 105.0) < 1e-9
+       for c in eng31a.client.calls), str(eng31a.client.calls))
+ev31a = [json.loads(l) for l in AUDIT.read_text(encoding="utf-8").splitlines()]
+mv31a = [e for e in ev31a if e["event"] == "trailing_stop_moved" and e["symbol"] == "BTC/USDT:USDT"]
+ok("perp trailing LONG: trailing_stop_moved auditado (old=95, new=105, peak=110)",
+   len(mv31a) == 1 and mv31a[0]["old_stop"] == 95.0 and mv31a[0]["new_stop"] == 105.0
+   and mv31a[0]["peak_price"] == 110.0 and mv31a[0]["side"] == "long", str(mv31a))
+prot31a_saved = protection_state.load().get("BTC/USDT:USDT")
+ok("perp trailing LONG: protection_state atualizada (novo stop_id, TP intacto)",
+   prot31a_saved is not None and prot31a_saved.get("stop_price") == 105.0
+   and prot31a_saved.get("peak_price") == 110.0 and prot31a_saved.get("tp_id") == "tp-31a"
+   and prot31a_saved.get("stop_id") != "stop-31a", str(prot31a_saved))
+protection_state.clear_protection("BTC/USDT:USDT")
+
+# 31b. LONG: melhora abaixo do passo mínimo -> NÃO mexe na exchange, só
+# persiste o pico avançado.
+_reset_fake_perp_trailing()
+AUDIT.unlink(missing_ok=True)
+prot31b = {"entry_price": 100.0, "take_profit": 130.0, "stop_price": 95.0,
+          "size": 2.0, "stop_id": "stop-31b", "tp_id": "tp-31b", "side": "long",
+          "profile": "daytrade", "trailing": True, "trail_distance": 5.0,
+          "peak_price": 100.0}
+eng31b = _eng31()
+protection_state.set_protection("ETH/USDT:USDT", entry_price=100.0, take_profit=130.0,
+                                stop_price=95.0, size=2.0, stop_id="stop-31b",
+                                tp_id="tp-31b", side="long", profile="daytrade",
+                                trailing=True, trail_distance=5.0, peak_price=100.0)
+eng31b._update_perp_trailing_stop("ETH/USDT:USDT", prot31b, 100.05)  # avanco minusculo
+ok("perp trailing LONG: melhora insuficiente -> NENHUMA chamada de exchange",
+   len(eng31b.client.calls) == 0, str(eng31b.client.calls))
+prot31b_saved = protection_state.load().get("ETH/USDT:USDT")
+ok("perp trailing LONG: pico avancado ainda assim persistido (stop_price intacto)",
+   prot31b_saved.get("peak_price") == 100.05 and prot31b_saved.get("stop_price") == 95.0,
+   str(prot31b_saved))
+protection_state.clear_protection("ETH/USDT:USDT")
+
+# 31c. LONG: preço já rompeu o nível trailed -> NADA de exchange (perp
+# sempre tem stop REAL — quem dispara é a própria ordem/exchange, não este
+# método; _check_perp_exits detecta no ciclo seguinte).
+_reset_fake_perp_trailing()
+prot31c = {"entry_price": 100.0, "take_profit": 130.0, "stop_price": 95.0,
+          "size": 2.0, "stop_id": "stop-31c", "tp_id": "tp-31c", "side": "long",
+          "profile": "daytrade", "trailing": True, "trail_distance": 5.0,
+          "peak_price": 100.0}
+eng31c = _eng31()
+eng31c._update_perp_trailing_stop("SOL/USDT:USDT", prot31c, 80.0)  # bem abaixo do stop
+ok("perp trailing LONG: nivel ja rompido -> nenhuma chamada de exchange (deixa a ordem real disparar)",
+   len(eng31c.client.calls) == 0, str(eng31c.client.calls))
+
+# 31d. SHORT: preço avança a favor (cai) -> stop desce de verdade.
+_reset_fake_perp_trailing()
+AUDIT.unlink(missing_ok=True)
+prot31d = {"entry_price": 100.0, "take_profit": 70.0, "stop_price": 105.0,
+          "size": 3.0, "stop_id": "stop-31d", "tp_id": "tp-31d", "side": "short",
+          "profile": "daytrade", "trailing": True, "trail_distance": 5.0,
+          "peak_price": 100.0}
+FakePerpTrailing.ORDER_RESPONSES = {
+    "stop-31d": {"id": "stop-31d", "status": "open", "filled": 0.0,
+                "triggerPrice": "105.0"},
+}
+eng31d = _eng31()
+eng31d._update_perp_trailing_stop("XRP/USDT:USDT", prot31d, 90.0)
+ok("perp trailing SHORT: cancela o stop antigo", ("cancel_order", "stop-31d", "XRP/USDT:USDT") in eng31d.client.calls)
+ok("perp trailing SHORT: arma o novo stop no preco certo (fundo+trail = 90+5=95), side ORIGEM='sell'",
+   any(c[0] == "set_stop_loss" and c[1] == "sell" and abs(c[3] - 95.0) < 1e-9
+       for c in eng31d.client.calls), str(eng31d.client.calls))
+ev31d = [json.loads(l) for l in AUDIT.read_text(encoding="utf-8").splitlines()]
+mv31d = [e for e in ev31d if e["event"] == "trailing_stop_moved" and e["symbol"] == "XRP/USDT:USDT"]
+ok("perp trailing SHORT: trailing_stop_moved auditado (old=105, new=95, side=short)",
+   len(mv31d) == 1 and mv31d[0]["old_stop"] == 105.0 and mv31d[0]["new_stop"] == 95.0
+   and mv31d[0]["side"] == "short", str(mv31d))
+
+# 31e. arquivo STALE curado: gatilho real na exchange é MELHOR (mais alto,
+# pra long) que o valor salvo -> cura o registro antes de decidir.
+_reset_fake_perp_trailing()
+AUDIT.unlink(missing_ok=True)
+prot31e = {"entry_price": 100.0, "take_profit": 140.0, "stop_price": 95.0,  # arquivo diz 95 (stale)
+          "size": 2.0, "stop_id": "stop-31e", "tp_id": "tp-31e", "side": "long",
+          "profile": "daytrade", "trailing": True, "trail_distance": 5.0,
+          "peak_price": 100.0}
+FakePerpTrailing.ORDER_RESPONSES = {
+    "stop-31e": {"id": "stop-31e", "status": "open", "filled": 0.0,
+                "triggerPrice": "98.0"},  # exchange real ja estava em 98 (move anterior nao persistiu)
+}
+eng31e = _eng31()
+eng31e._update_perp_trailing_stop("DOGE/USDT:USDT", prot31e, 110.0)
+ev31e = [json.loads(l) for l in AUDIT.read_text(encoding="utf-8").splitlines()]
+mv31e = [e for e in ev31e if e["event"] == "trailing_stop_moved" and e["symbol"] == "DOGE/USDT:USDT"]
+ok("perp trailing: arquivo stale curado com o gatilho REAL (old_stop=98, nao os 95 do arquivo)",
+   len(mv31e) == 1 and mv31e[0]["old_stop"] == 98.0, str(mv31e))
+
+# 31f. stop real já FECHADO (confirmado via fetch_order) ao checar antes de
+# mover -> aborta sem tentar cancelar/re-armar nada (deixa
+# _check_perp_exits reconciliar o fechamento no proximo ciclo).
+_reset_fake_perp_trailing()
+prot31f = {"entry_price": 100.0, "take_profit": 130.0, "stop_price": 95.0,
+          "size": 2.0, "stop_id": "stop-31f", "tp_id": "tp-31f", "side": "long",
+          "profile": "daytrade", "trailing": True, "trail_distance": 5.0,
+          "peak_price": 100.0}
+FakePerpTrailing.ORDER_RESPONSES = {
+    "stop-31f": {"id": "stop-31f", "status": "closed", "filled": 2.0,
+                "average": 94.9},
+}
+eng31f = _eng31()
+eng31f._update_perp_trailing_stop("ADA/USDT:USDT", prot31f, 110.0)
+ok("perp trailing: stop ja fechado (confirmado) -> nenhum cancel/set_stop_loss tentado",
+   not any(c[0] in ("cancel_order", "set_stop_loss") for c in eng31f.client.calls),
+   str(eng31f.client.calls))
+
+# 31g. cancelamento do stop antigo FALHA -> aborta o move sem crashar e sem
+# tentar armar um stop novo (nao sabe se o antigo ainda protege ou nao).
+_reset_fake_perp_trailing()
+FakePerpTrailing.CANCEL_SHOULD_FAIL = True
+prot31g = {"entry_price": 100.0, "take_profit": 130.0, "stop_price": 95.0,
+          "size": 2.0, "stop_id": "stop-31g", "tp_id": "tp-31g", "side": "long",
+          "profile": "daytrade", "trailing": True, "trail_distance": 5.0,
+          "peak_price": 100.0}
+FakePerpTrailing.ORDER_RESPONSES = {
+    "stop-31g": {"id": "stop-31g", "status": "open", "filled": 0.0,
+                "triggerPrice": "95.0"},
+}
+eng31g = _eng31()
+try:
+    eng31g._update_perp_trailing_stop("LINK/USDT:USDT", prot31g, 110.0)
+    nao_propagou31g = True
+except Exception:
+    nao_propagou31g = False
+ok("perp trailing: falha ao cancelar o stop antigo nao propaga (isolamento)", nao_propagou31g)
+ok("perp trailing: falha no cancelamento -> nenhum set_stop_loss tentado (nao sabe se o antigo ainda vale)",
+   not any(c[0] == "set_stop_loss" for c in eng31g.client.calls), str(eng31g.client.calls))
+FakePerpTrailing.CANCEL_SHOULD_FAIL = False
+
+# 31h. cancelamento sucede mas o NOVO stop falha -> re-arma no preco ANTIGO
+# (nunca posicao sem stop nenhum); sucesso do re-arm audita
+# trailing_move_failed_stop_rearmed.
+_reset_fake_perp_trailing()
+AUDIT.unlink(missing_ok=True)
+FakePerpTrailing.SET_STOP_RESPONSES = [RuntimeError("novo stop rejeitado (simulado)"),
+                                       {"id": "stop-31h-rearmed"}]
+prot31h = {"entry_price": 100.0, "take_profit": 130.0, "stop_price": 95.0,
+          "size": 2.0, "stop_id": "stop-31h", "tp_id": "tp-31h", "side": "long",
+          "profile": "daytrade", "trailing": True, "trail_distance": 5.0,
+          "peak_price": 100.0}
+FakePerpTrailing.ORDER_RESPONSES = {
+    "stop-31h": {"id": "stop-31h", "status": "open", "filled": 0.0,
+                "triggerPrice": "95.0"},
+}
+eng31h = _eng31()
+eng31h._update_perp_trailing_stop("DOT/USDT:USDT", prot31h, 110.0)
+ev31h = [json.loads(l) for l in AUDIT.read_text(encoding="utf-8").splitlines()]
+rearm31h = [e for e in ev31h if e["event"] == "trailing_move_failed_stop_rearmed"
+           and e["symbol"] == "DOT/USDT:USDT"]
+ok("perp trailing: novo stop falha -> re-arma no preco ANTIGO (95) e audita",
+   len(rearm31h) == 1 and rearm31h[0]["stop_price"] == 95.0, str(rearm31h))
+prot31h_saved = protection_state.load().get("DOT/USDT:USDT")
+ok("perp trailing: protecao persistida com o stop_id do RE-ARM (nao perde o rastreio)",
+   prot31h_saved is not None and prot31h_saved.get("stop_id") == "stop-31h-rearmed"
+   and prot31h_saved.get("stop_price") == 95.0, str(prot31h_saved))
+protection_state.clear_protection("DOT/USDT:USDT")
+
+# 31i. sem stop_id/size rastreado -> aborta sem crashar (defesa, nao deveria
+# acontecer numa proteção real persistida pelo executor).
+_reset_fake_perp_trailing()
+prot31i = {"entry_price": 100.0, "take_profit": 130.0, "stop_price": 95.0,
+          "size": None, "stop_id": None, "tp_id": None, "side": "long",
+          "profile": "daytrade", "trailing": True, "trail_distance": 5.0,
+          "peak_price": 100.0}
+eng31i = _eng31()
+try:
+    eng31i._update_perp_trailing_stop("MATIC/USDT:USDT", prot31i, 110.0)
+    nao_propagou31i = True
+except Exception:
+    nao_propagou31i = False
+ok("perp trailing: sem stop_id/size -> aborta sem crashar", nao_propagou31i)
+
+engine_mod.BybitClient = FakeEthQuebrado
 
 
 print()
