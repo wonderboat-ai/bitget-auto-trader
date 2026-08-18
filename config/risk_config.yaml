@@ -145,7 +145,28 @@ trading:
   profiles:
     daytrade:
       timeframe: "15m"
-      enabled: true
+      # DESLIGADO em 18/08/2026, decisão explícita do Lucas depois da pesquisa
+      # 3 (research/RELATORIO-2026-08-18-pesquisa-3-perp.md).
+      #
+      # Causa raiz: com o teto de nocional de 50% do equity MORDENDO em 90% dos
+      # sinais reais (confirmado na trilha do PC2), o nocional fica constante e
+      # a fee vira uma fração fixa do nocional — enquanto 1R encolhe junto com
+      # a distância do stop. A identidade é fee/R = 0,11% ÷ stop%. Em 15m o
+      # stop mediano REAL é 0,40% do preço, então a fee come ~27% de cada 1R
+      # antes de qualquer consideração de estratégia. Em 4h o stop mediano é
+      # 1,55% e a fee cai para ~7%.
+      #
+      # Medido (BTC+ETH, o universo real deste YAML, últimos 12 meses):
+      # mediana -97,20%, R/trade -0,3525, 9.401 trades, 1.317 USDT de fee sobre
+      # 2.000 de capital inicial. Em 3 anos e 8 símbolos: -98,00%, 0/8
+      # positivos, t até -28,58. É a estatística mais forte de todo o estudo —
+      # a evidência de que este perfil perde é MAIS forte que a evidência de
+      # qualquer estratégia candidata ganhar.
+      #
+      # Este perfil respondia por 16 dos 33 order_executed reais do PC2 (48,5%).
+      # Religar é uma linha — mas só com evidência nova de que a fricção de 15m
+      # foi resolvida (ordem limit/maker, stop mais largo, ou nocional maior).
+      enabled: false
     swing:
       timeframe: "4h"
       enabled: true

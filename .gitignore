@@ -15,6 +15,9 @@ env/
 logs/*.log
 logs/*.jsonl
 state/*.json
+# Sobra da escrita atômica (.tmp -> replace): em pasta sincronizada o replace
+# pode falhar e deixar o .tmp para trás. Nunca é código; não versionar.
+state/*.tmp
 
 # Dados de mercado e cache do dossiê (regeneráveis via research/download_data*.py
 # e dossier_fetch.py — não são código, não precisam ir pro repositório)
@@ -25,9 +28,12 @@ state/*.json
 /research/data/
 /research/data_2b/
 /research/data_perp/
+/research/data_3/
 /research/results/
 /research/results_2b/
+/research/results_3/
 /research/scratch/
+/research/scratch3/
 research/*.jsonl
 
 # Dossiê diário gerado (arquivo histórico, não é código)

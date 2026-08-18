@@ -23,23 +23,18 @@ import pandas as pd  # noqa: E402
 import yaml  # noqa: E402
 
 # ---------- guarda: backup/restauração de trilha e config ----------
+# Usa tests/_guard.py desde 18/08/2026 — nome de backup PRÓPRIO desta suíte.
+# Antes, esta suíte e a test_smoke.py compartilhavam audit.jsonl.bak-teste e a
+# combinação "restauração do smoke falha + ciclo roda em seguida" destruía a
+# trilha real (aconteceu em 18/08/2026). Ver tests/_guard.py.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _guard import FileGuard  # noqa: E402
+
 AUDIT = ROOT / "logs" / "audit.jsonl"
 YAMLP = ROOT / "config" / "risk_config.yaml"
-_BAK_A = ROOT / "logs" / "audit.jsonl.bak-teste"
-_BAK_Y = ROOT / "config" / "risk_config.yaml.bak-teste"
-if AUDIT.exists():
-    shutil.copy2(AUDIT, _BAK_A)
-shutil.copy2(YAMLP, _BAK_Y)
-
-
-def _restaura() -> None:
-    if _BAK_A.exists():
-        shutil.move(str(_BAK_A), str(AUDIT))
-    if _BAK_Y.exists():
-        shutil.move(str(_BAK_Y), str(YAMLP))
-
-
-atexit.register(_restaura)
+_GUARD_AUDIT = FileGuard(AUDIT, "ciclo")
+_GUARD_YAML = FileGuard(YAMLP, "ciclo")
+_BAK_Y = _GUARD_YAML.bak      # o bloco B restaura o YAML padrão a partir daqui
 
 # ---------- guarda: state/spot_protections.json ----------
 # Desde 18/07/2026, _check_spot_exits() persiste proteção backfilled no

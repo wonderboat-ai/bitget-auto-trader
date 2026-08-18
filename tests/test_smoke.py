@@ -23,18 +23,18 @@ os.chdir(ROOT)
 import pandas as pd  # noqa: E402
 
 # ---------- guarda: backup/restauração da trilha ----------
+# Usa tests/_guard.py desde 18/08/2026. ANTES, esta suíte e a test_ciclo.py
+# gravavam o backup no MESMO nome (audit.jsonl.bak-teste): quando a restauração
+# do smoke falhava por lock do Dropbox (erro conhecido no Windows), a suíte
+# seguinte copiava a trilha JÁ CONTAMINADA por cima do único backup e restaurava
+# essa versão — perda definitiva da trilha real. Aconteceu de verdade em
+# 18/08/2026 com a trilha do PC1. O guard garante nome de backup por suíte e
+# nunca sobrescreve um backup pendente. Ver tests/_guard.py.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _guard import FileGuard  # noqa: E402
+
 AUDIT = ROOT / "logs" / "audit.jsonl"
-_BAK = ROOT / "logs" / "audit.jsonl.bak-teste"
-if AUDIT.exists():
-    shutil.copy2(AUDIT, _BAK)
-
-
-def _restaura() -> None:
-    if _BAK.exists():
-        shutil.move(str(_BAK), str(AUDIT))
-
-
-atexit.register(_restaura)
+_GUARD_AUDIT = FileGuard(AUDIT, "smoke")
 
 # ---------- guarda: state/spot_protections.json (seções 9-12 escrevem nele
 # via Executor/engine em modo spot) — precisa capturar o conteúdo ANTES de
