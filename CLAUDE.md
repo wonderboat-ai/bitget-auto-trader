@@ -1,42 +1,343 @@
-# CLAUDE.md — Bybit Auto Trader (handoff 2026-07-29, madrugada, sessão perp)
+# CLAUDE.md — Bybit Auto Trader (handoff 2026-08-18, motor 24h rodando no PC2)
 
 Contexto vivo do projeto para agentes (Claude Code/Cowork). Fonte completa de
-regras: `INSTRUCOES-PROJETO-v2.md` v2 + `RASCUNHO-instrucoes-v9-colar-manualmente.md`
-(v9, criado 28/07 — ver "Status atual" lá; ainda NÃO colada nas instruções
-do Claude Project — substitui a v8, que nunca chegou a ser colada, mesmo
-padrão da v6→v7). Guia operacional humano: `PASSO-A-PASSO.md` (bootstrapping
+regras: `INSTRUCOES-PROJETO-v2.md` v2 + `RASCUNHO-instrucoes-v10-colar-manualmente.md`
+(v10, criado 30/07 — ver "Status atual" lá; ainda NÃO colada nas instruções
+do Claude Project — substitui a v9, que nunca chegou a ser colada, mesmo
+padrão da v6→v7 e v8→v9). Guia operacional humano: `PASSO-A-PASSO.md` (bootstrapping
 testnet — todas as etapas fechadas, ver seu próprio aviso de topo). Idioma
 de trabalho: português do Brasil. Comentários de código explicam causa raiz.
 
 ## PRÓXIMA AÇÃO (ler antes de qualquer outra coisa)
 
-**O motor NÃO está rodando.** Achado ao encerrar a sessão de 28-29/07: nenhum
-processo `main.py`/`supervisor.py` vivo, e não há `engine_stop` limpo na
-trilha depois do último ciclo real (03:18:25 UTC de 29/07) — o processo
-morreu ou foi encerrado sem deixar rastro (não fui eu; não há confirmação de
-quem/o quê). A posição real (ETH/USDT perp long, ~0,0288 contratos, entrada
-1.901,40) continua protegida pelo stop (1.890,41) e TP (1.923,38) reais na
-exchange, independente do processo — mas SEM o bot supervisionando
-(trailing não se move, fechamento não é auditado) enquanto ficar parado.
+### Status verificado em 18/08/2026 ~13:55 UTC — motor VIVO no PC2, 18 dias de operação contínua
 
-**Antes de religar, nessa ordem:**
-1. Rodar a suíte completa (`python tests\test_smoke.py` + `python
-   tests\test_ciclo.py`) — a seção 31 (trailing em perp, 9 sub-testes,
-   escrita nesta sessão) **nunca foi executada**; o Lucas pediu
-   explicitamente pra parar antes de rodar e avisar primeiro, a sessão
-   encerrou nesse ponto. Última contagem CONFIRMADA (antes da seção 31):
-   288/288 (280 smoke + 8 ciclo).
-2. Corrigir o que a seção 31 apontar, se apontar algo.
-3. Confirmar que não há OUTRO processo do motor rodando em paralelo antes de
-   religar (checar `Get-CimInstance Win32_Process -Filter "Name='python.exe'"`
-   filtrando `main.py`/`supervisor.py` — nesta sessão rolou um incidente de
-   duas instâncias simultâneas, ver "Incidente" abaixo).
-4. Religar via `python supervisor.py --live` (mesmo comando de sempre —
-   nada mudou na forma de iniciar).
-5. Confirmar no primeiro ciclo: `market_type: perp` (MCP
-   `trader_get_status`), posição ETH reconciliada sem erro, e — importante
-   —, watchdog nos primeiros minutos pra ver se o trailing novo move o
-   stop de verdade num caso real (nunca validado ao vivo, só em teste).
+**O motor roda SOMENTE no PC2 (`C:\BybitAutoTrader`), mainnet, `--live`,
+dinheiro real.** Esta pasta (PC1, Dropbox) é **só dev/documentação** — não
+rodar `--live` daqui, nunca, sem parar o PC2 antes (mesma conta mainnet nos
+dois; decisão de 31/07, ver seção histórica logo abaixo). O `logs/audit.jsonl`
+DESTE PC1 está congelado desde 31/07 19:18:53 UTC (`engine_stop` manual) —
+**a fonte de verdade da operação é `C:\BybitAutoTrader\logs\audit.jsonl`**.
+
+**Processo confirmado ao vivo** (via `Get-CimInstance Win32_Process`): uma
+única árvore `supervisor.py --live` → `main.py --interval 60 --live`, de pé
+desde 18/08 05:11 local; último `engine_start` auditado 18/08 08:11:06 UTC
+(`dry_run: false`). Trilha do PC2 com 107.024 linhas, último evento
+13:53:35 UTC — ciclos normais de ~62s, sem buraco.
+
+**Estado da conta neste instante:**
+- Kill switch **livre** (`halted: false`).
+- **1 posição aberta**: BTC/USDT:USDT **short**, entry 64.312,20, TP
+  63.164,21, stop **já trailed 3x** (64.886,20 → 64.821,80 → 64.661,10),
+  size 0,0014280806, perfil swing.
+- **ETH/USDT:USDT em cooldown de 24h** até 19/08 13:39:53 UTC — 3º stop do
+  dia, teto de 1440min atingido (mecanismo funcionando como desenhado).
+
+**PnL real desde a migração pro PC2 (01/08 → 18/08): 32 trades fechados,
+−2,92 USDT, 10 wins (31,3%).** 30 fecharam por `stop_loss`, 2 por
+`take_profit`; 23 em ETH, 9 em BTC. Trades pequenos (perda média por trade
+na casa de 0,1–0,5 USDT). **105 `trailing_stop_moved` reais** — o trailing
+trabalha de verdade e vários fechamentos rotulados `stop_loss` saíram
+POSITIVOS justamente por isso (ex.: hoje +0,088 e +0,122), comportamento
+esperado em perp (não existe motivo de saída "trailing_stop" separado em
+perp — ver Sessão 29-30/07). Análise de trader em cima desta amostra:
+seção "Análise da amostra real de trades" no fim deste arquivo.
+
+**Saúde mecânica nos 18 dias — limpa:** ZERO `kill_switch_tripped`, ZERO
+`naked_position_close_failed`, ZERO `*_rearm_stop_failed`, ZERO
+`external_close_unconfirmed`. Um único `engine_crash_restart` (12/08
+20:33:08 UTC, `exit_code 1073807364` = 0xC000013A, encerramento de console;
+`uptime_sec` 97.230 ≈ 27h) — o `supervisor.py` religou sozinho na 1ª
+tentativa, exatamente o que ele existe pra fazer. 2 `cooldown_reset`
+manuais (11/08 e 14/08). 8 `engine_start` / 3 `engine_stop` na trilha do
+PC2 (a diferença são restarts pós-crash/desligamento, não instância dupla —
+processo único confirmado agora).
+
+**Ruído recorrente, não é bug (já documentado):** 13.759
+`symbol_cycle_error`, **todos** a mesma linha ("amount of BTC/USDT:USDT must
+be greater than minimum amount precision of 0.001") — nocional do BTC abaixo
+do mínimo da Bybit com o teto de capital atual. **Zero ocorrências hoje**: o
+nocional finalmente passou do mínimo e o BTC voltou a operar de verdade (a
+posição short aberta agora é prova). 31 `cycle_error` de `wallet-balance`
+(falha transitória da Bybit, autolimitada).
+
+**Lacunas de supervisão do handoff anterior: RESOLVIDAS.** O
+`C:\Users\lucas\.claude\scheduled-tasks\` deste PC2 tem hoje
+`trader-watchdog-pc2` (a cada 30min, somente-leitura, lendo
+`C:\BybitAutoTrader\logs\audit.jsonl`) e `dossie-cripto-pc2`. O `.mcp.json`
+do PC2 aponta corretamente pra `C:\BybitAutoTrader\.venv\...\mcp_server.py`.
+
+**MCP do PC1: EM STANDBY, deliberadamente (decisão do Lucas, 18/08).** O
+`.mcp.json` desta pasta ainda aponta pra um caminho ANTIGO
+(`C:\Users\lucas\OneDrive\Documentos\Claude\Projects\Projeto Auto-trader\...`)
+que **não existe mais** — o projeto mudou pro Dropbox faz tempo. Não foi
+consertado de propósito: quem está vivo é o PC2, e o MCP que importa é o de
+lá. Consequência prática: **as ferramentas `trader_halt_status`/
+`trader_realized_pnl`/etc. NÃO funcionam a partir desta pasta** — pra
+consultar status/PnL reais, use o MCP do PC2 ou leia direto
+`C:\BybitAutoTrader\logs\audit.jsonl`. Se um dia o PC1 voltar a ser
+operacional, corrigir os dois caminhos do `.mcp.json` é o primeiro passo
+(o arquivo está no `.gitignore` — é config local, não versionada).
+
+**Código: PC1 e PC2 estão IDÊNTICOS** — comparei arquivo a arquivo
+(`src/**/*.py`, `main.py`, `supervisor.py`, `config/*`, `tests/*`): as
+únicas diferenças são de fim de linha (CRLF no Dropbox × LF no clone do
+PC2), zero diferença de conteúdo. Ambos em `b528852`, sincronizado com
+`origin/main`.
+
+**Suíte de testes: 307/307 na última confirmação (30/07), NÃO re-rodada em
+18/08** — o motor está ao vivo e o protocolo do projeto proíbe rodar a
+suíte nessa condição (ela escreve/restaura `logs/audit.jsonl` e
+`state/*.json` reais). Como nenhum código mudou desde então, a contagem
+continua válida; se alguém precisar re-confirmar, parar o motor do PC2
+primeiro.
+
+**Branch `cooldown-3-niveis-reset-manual` APAGADA em 18/08** (local e
+remota) — confirmada 100% mesclada em `main` antes (`git branch --merged
+main` a listava; `git log main..cooldown-3-niveis-reset-manual` vazio). Os
+commits dela (`8c71a19`, `5f281b9`) seguem no histórico de `main`.
+
+### Sessão 31/07/2026 — a migração do PC1 para o PC2 (histórico)
+
+**MUDANÇA GRANDE (31/07/2026): a operação 24h migrou deste PC (PC1) para o
+PC2 — MESMA conta mainnet, decisão explícita do Lucas ("sim, pode ligar aqui
+e deixar o PC1 parado").** Contexto: o Lucas estava configurando um PC2 novo
+(`C:\BybitAutoTrader`, fora de qualquer pasta sincronizada — Python/Git/GitHub
+CLI instalados via winget, repo clonado, venv criado, dependências instaladas)
+pra ser o operador 24h, igual ao plano original do `PASSO-A-PASSO-PC2.md` —
+só que esse guia foi escrito em 25/07, ainda em TESTNET com conta separada.
+Como o projeto virou mainnet em 27/07, a pergunta foi refeita: que conta o
+PC2 devia usar? O Lucas escolheu explicitamente **a MESMA chave de mainnet do
+PC1** (não uma conta nova) — isso significa que **NUNCA pode haver `--live`
+rodando nos dois PCs ao mesmo tempo** (mesma conta = mesmo saldo/posições;
+dois motores independentes gerenciando isso ao mesmo tempo é exatamente o
+cenário perigoso que o projeto sempre evitou). Por isso, **este PC (PC1) fica
+PARADO PERMANENTEMENTE a partir de agora** — não é uma pausa temporária tipo
+"aguardando o Lucas voltar" (como era até a sessão anterior), é a decisão
+operacional definitiva: **PC2 = produção 24h; PC1 = só dev/testes, nunca
+mais `--live` contínuo sem parar o PC2 antes**.
+
+**Motor confirmado rodando ao vivo no PC2** desde 31/07 ~22:54:38 UTC
+(`engine_start`, `dry_run: false`, auditado em `C:\BybitAutoTrader\logs\audit.jsonl`
+— arquivo NOVO e LOCAL do PC2, não sincronizado com este `logs/audit.jsonl`
+do PC1; a partir de agora, esse é o arquivo que importa para o estado real da
+operação). Validado nos primeiros 2 ciclos: `signal_approved` short BTC
+recorrente (mesmo "achado banal" já documentado — nocional abaixo do mínimo
+de ordem da Bybit pra BTC perp com o teto de capital atual, `symbol_cycle_error`,
+não é bug), símbolos ETH/BTC reconciliados corretamente como já abertos (sem
+duplicar entrada). Único processo `supervisor.py`→`main.py` confirmado (sem
+instância dupla). Um `Monitor` foi armado NESTA sessão observando
+`C:\BybitAutoTrader\logs\audit.jsonl` para eventos críticos — mas isso morre
+com a sessão (mesma limitação documentada antes pro `Monitor` do PC1); **não
+existe hoje um watchdog agendado (`trader-watchdog`) apontando pro PC2** — o
+`C:\Users\lucas\.claude\scheduled-tasks\` deste PC2 está VAZIO (confirmado),
+ou seja, o `trader-watchdog`/`dossie-cripto-intraday` que já existiam
+provavelmente só rodam de onde o Claude Desktop/Cowork do PC1 (ou de outra
+máquina) está instalado — **isso é uma lacuna real de supervisão pro PC2 que
+precisa de decisão do Lucas**: recriar o watchdog rodando a partir do PC2, ou
+aceitar que a supervisão automática por ora só existe dentro de sessões ativas
+de Claude Code no PC2. — **SUPERADO: em 18/08 confirmei `trader-watchdog-pc2`
+e `dossie-cripto-pc2` já criados e agendados no PC2 (ver Status 18/08 no
+topo). Esta lacuna não existe mais.**
+
+**Se for investigar/continuar algo no PC1 (esta pasta), lembrar**: o
+`logs/audit.jsonl` DESTE PC1 parou de ser a fonte de verdade da operação
+em 31/07 ~22:54 UTC — ele registra o histórico até esse ponto (inclusive o
+`engine_stop` manual das 16:58:39 UTC de 30/07, que era pra ter sido temporário
+e virou definitivo). Todo evento novo de trading real está em
+`C:\BybitAutoTrader\logs\audit.jsonl`, no PC2. As ferramentas MCP
+(`trader_halt_status`, `trader_realized_pnl` etc.) deste PC1 continuam
+configuradas pra ler os arquivos LOCAIS deste PC1 (`state/*.json`,
+`logs/audit.jsonl`) — **elas não enxergam o PC2** a menos que alguém rode o
+MCP a partir de lá ou reconfigure os caminhos. Isso também é uma lacuna a
+resolver com o Lucas se ele quiser consultar status/PnL do PC2 por aqui. —
+**RESOLVIDO POR DECISÃO em 18/08: o MCP do PC1 fica em STANDBY** (o
+`.mcp.json` daqui aponta pra um caminho OneDrive que nem existe mais);
+o MCP vivo é o do PC2, já configurado certo lá. Ver "MCP do PC1: EM
+STANDBY" no Status 18/08 no topo.
+
+**Sem pendência bloqueante de código** — a suíte 307/307 e a validação ao
+vivo de perp (long/short, trailing, cooldown 3 níveis) da sessão 29-30/07
+seguem válidas (ver "Sessão 29-30/07/2026" logo abaixo). Nenhuma posição
+nova foi aberta pelo PC1 desde então; o PC2 herda/reconcilia o estado real
+da conta a partir de agora.
+
+**Rastreio da posição herdada RECONSTRUÍDO manualmente em `state/spot_protections.json`
+do PC2 (31/07 ~23:57 UTC).** A única posição real aberta na migração —
+ETH/USDT:USDT long 0.01, entry 1859,41, perfil swing, aberta pelo PC1 às
+14:44:16 UTC do mesmo dia — não tinha nenhum registro local no PC2, porque
+`protection_state.backfill_from_audit()` só relê a trilha LOCAL de cada
+processo, e o `order_executed` dessa entrada está no `logs/audit.jsonl` do
+PC1, nunca no do PC2. Sem esse registro, o PC2 não teria como mover o
+trailing, auditar o fechamento, alimentar o cooldown nem cancelar a ordem
+irmã órfã quando essa posição fechasse. Corrigido escrevendo o registro à
+mão em `state/spot_protections.json`, usando dados confirmados DIRETO na
+exchange (não a trilha antiga, que estava desatualizada — o PC1 já tinha
+movido o trailing pelo menos uma vez antes de eu ligar o PC2):
+`stop_id=46554f93-3b38-4d76-92b5-711bf270c3e5` (trigger real 1834,25 —
+diferente do `stop_id`/preço originais da entrada, 0cffc4a4.../1817,64,
+confirma que o PC1 já tinha trailed o stop pra cima antes da migração),
+`tp_id=dc73a952-a054-47af-9c04-735de9cb0cd0` (trigger 1942,95, igual ao
+original — nunca muda), `trail_distance=41,76857142857148` (constante desde
+a entrada, único jeito de recalcular `peak_price=stop_price+trail_distance
+=1876,0185714285715` com segurança). Verificado com
+`protection_state.load()` direto (parseia certo) e confirmado que os
+ciclos seguintes do motor rodaram normalmente sem erro depois da escrita.
+**Lição pra qualquer migração de PC futura**: `state/spot_protections.json`
+(e por extensão `cooldown_state.json`) NUNCA atravessam sozinhos entre
+processos/máquinas — se houver posição real aberta no momento da virada,
+reconstruir esse arquivo manualmente é um passo necessário, não opcional.
+
+**Se for religar ou investigar algo, lição desta sessão primeiro:** o Lucas
+religou o motor várias vezes direto no terminal externo sem sempre avisar
+antes. Numa dessas vezes, o comando digitado foi `.venv\Scripts\activate`
+seguido de `python supervisor.py --live` (sem o caminho completo) — isso
+resolveu pro Python DE SISTEMA (sem as dependências do projeto, faltando
+até o `pyyaml`), e o `main.py` crashou 6 vezes seguidas
+(`ModuleNotFoundError: No module named 'yaml'`) até o supervisor desistir
+sozinho (`engine_supervisor_giveup`, teto de 5 tentativas/30min). **NÃO é
+bug de código** (confirmado rodando `main.py --once` direto, funcionou
+perfeito) — é especificamente essa combinação de comandos neste ambiente.
+**Sempre usar o caminho completo, `.venv\Scripts\python.exe supervisor.py
+--live`, nunca `python` puro** (mesmo com o venv "ativado" — não é
+confiável aqui). Fora isso, nada pendente: considerar reavaliar os números
+de risco do YAML (cooldown 30/60/1440min, teto de capital 50%, alavancagem
+2x) — já é pendência aberta desde a v9 das instruções (carregada pra v10), e agora já tem
+operação real (long+short) suficiente pra dar ao Lucas uma base de decisão.
+
+## Sessão 29-30/07/2026 — suíte confirmada, perp validado ao vivo ponta a ponta (long E short)
+
+Continuação direta da sessão anterior (28-29/07), que tinha encerrado com o
+motor caído e a suíte pendente de rodar (ver "PRÓXIMA AÇÃO" da época). Nesta
+sessão: suíte rodada e corrigida, código commitado e enviado pro GitHub, e —
+o mais importante — TODA a superfície nova do trailing/fechamento/cooldown
+em perp (bugs #48/#49, escritos mas nunca exercitados com dinheiro real) foi
+validada ao vivo, incluindo o lado SHORT pela primeira vez na história do
+projeto.
+
+**1) Suíte completa rodada, achado e corrigido um bug — no fixture de
+teste, não no motor.** Confirmado por `Get-CimInstance Win32_Process` que
+nenhum `main.py`/`supervisor.py` estava rodando, então `test_smoke.py` +
+`test_ciclo.py` rodaram: **297/299 na 1ª rodada** — as 2 falhas eram
+exatamente na seção 31 (trailing perp), a seção que a sessão anterior
+tinha deixado pendente. Investigado: `FakePerpExit.fetch_order`
+(`tests/test_smoke.py`) lia o atributo `FakePerpExit.ORDER_RESPONSES` da
+CLASSE-BASE, hardcoded, em vez de `type(self).ORDER_RESPONSES` — a
+subclasse `FakePerpTrailing` (usada só na seção 31) reatribuía
+`ORDER_RESPONSES` nela mesma sem nenhum efeito, então os dois testes mais
+importantes da seção (curar um arquivo stale contra o gatilho REAL da
+exchange; abortar sem tentar nada quando o stop já tinha fechado) caíam
+num fallback genérico que mascarava exatamente o cenário que deveriam
+provar. Corrigido trocando pra `type(self).ORDER_RESPONSES` — não mexe em
+nenhum teste da seção 30 (que sempre usou a classe-base direto, `type(self)
+== FakePerpExit` nesse caso, comportamento idêntico). Suíte final: **299/299
+smoke + 8/8 ciclo = 307/307 verde**. A lógica real de
+`_update_perp_trailing_stop` em `src/engine.py` nunca esteve errada — só
+não tinha prova.
+
+**2) Dois commits feitos e enviados pro GitHub, a pedido do Lucas**
+("commita a correção do teste" → "commita as outras também" → "push pro
+origin"): `548300d` (só o fix do fixture, mas como toda a seção 30/31 de
+`tests/test_smoke.py` já estava uncommitted da sessão anterior, não dava
+pra isolar só a linha da correção — o commit ficou com o arquivo inteiro,
+mensagem deixa claro qual é a correção específica) e `b528852` (o resto:
+`CLAUDE.md`, `config/risk_config.yaml`, `src/engine.py`,
+`src/exchange/bybit_client.py`, `src/execution/executor.py`,
+`src/execution/protection_state.py` — perp religado, teto de alavancagem/
+capital, fechamento auditado, trailing real; bugs #48/#49 da sessão
+anterior). `git push origin main`: `18b3e55..b528852`. Repositório
+GitHub (`wonderboat-ai/bybit-auto-trader`) atualizado; PC2 pode puxar via
+`git pull` quando religar (motor parado lá primeiro, mesma regra de
+sempre).
+
+**3) Motor religado — MUITAS vezes ao longo da sessão, num padrão caótico
+de liga/desliga que vale registrar como lição.** Sequência real (todos os
+horários UTC, 29-30/07): `engine_start` 03:52:41 → `trade_closed` real
+03:55:59 (ETH long, stop_loss, -0,22 USDT — 1ª validação ao vivo do
+fechamento auditado em perp, bug #49) → `engine_stop`/manual 03:58:45 (o
+Lucas, direto no terminal, confirmado por ele no chat: "PAREI") →
+crash-loop de 04:09 a 04:14 (6 tentativas, `engine_supervisor_giveup` —
+ver lição do `python` sem caminho completo, "PRÓXIMA AÇÃO" acima) →
+mais liga/desliga manual entre 04:15 e 04:41 (`engine_start`/`engine_stop`
+alternando a cada poucos minutos, inclusive mais um crash-loop de 1
+tentativa) → **04:41:20 estabilizou** e rodou contínuo por quase 7h.
+Durante essa janela estável: 04:56:23 nova entrada ETH **SHORT** (primeira
+posição short REAL de perp neste projeto, depois do religamento de
+short/perp na sessão anterior) → 06:28:49 `trade_closed` (short,
+stop_loss, entry 1.904,58 → exit 1.918,01, pnl -0,27 — confirma o fix do
+PnL invertido pra short, bug #49, funcionando certo ao vivo) → esse foi o
+**3º stop do dia no ETH/USDT:USDT, cooldown escalou pro teto de 24h**
+(1440min) — primeira vez que o 3º nível é confirmado ao vivo (os níveis
+1/2, 30/60min, já tinham sido confirmados em 22/07; o teto de 24h nunca
+tinha dado esse 3º stop no mesmo dia até agora). Motor ficou rodando
+estável (só BTC falhando no notional mínimo, esperado) até `engine_stop`
+manual 11:30:21 (o Lucas de novo, sem avisar antes — só percebi
+perguntando "posso ligar o motor" dele, depois reconstruindo a trilha).
+Religado por mim 21:31:13 (a pedido explícito, "religa e rearma o
+monitor") — rodando desde então, sem interrupção, até o fechamento deste
+handoff.
+
+**Lição operacional confirmada de novo nesta sessão**: o Lucas tem acesso
+direto ao terminal externo que eu abro pra rodar o motor, e usa esse acesso
+— religou/parou várias vezes sem sempre me avisar antes ou depois. Isso é
+esperado e está dentro do previsto (ele tem controle total sobre `--live`,
+por desenho), mas na prática significa que a trilha (`logs/audit.jsonl`) é
+SEMPRE a fonte de verdade, nunca a suposição de "a última vez que eu chequei
+estava rodando". Reconciliar contra a trilha inteira depois de qualquer
+gap, não confiar só no que o monitor pegou (ver item 5 abaixo).
+
+**4) Reset manual de cooldown via MCP, usado de verdade pela primeira
+vez.** A pedido do Lucas ("resetar antes via trader_reset_cooldown"),
+chamei `trader_reset_cooldown(symbol="ETH/USDT:USDT", confirm=True)` às
+22:21:23 UTC (cooldown ainda tinha ~8h pro prazo natural, 30/07 06:28) —
+`cooldown_reset` auditado corretamente, e o motor aprovou uma entrada nova
+em ETH (short) só 3 segundos depois, no ciclo seguinte. Confirma que o
+canal `state/control.json` → `_apply_control_signal` funciona ponta a
+ponta pra esse tipo de sinal também (só tinha sido testado, nunca usado ao
+vivo até agora).
+
+**5) Trailing em perp validado ao vivo pela primeira vez — múltiplos
+movimentos reais, e um fechamento pelo próprio stop trailed.** A posição
+short aberta às 22:21:28 (entry 1.907,73, stop original 1.924,68) teve o
+stop movido **5 vezes reais** conforme o preço caiu a favor (pico indo de
+1.905,46 até 1.895,20), sempre auditado com `trailing_stop_moved` (old_stop/
+new_stop/peak_price corretos, side=short). Às 01:33:02 UTC de 30/07 o
+preço reverteu e bateu no stop JÁ MOVIDO (não no original) — fechou com
+`pnl_usdt = -0,09`, MUITO menor do que teria sido no stop original
+(1.924,68 vs o preço real de saída 1.912,21 — a diferença é exatamente o
+que o trailing capturou de proteção extra). Em perp não existe um motivo
+de fechamento "trailing_stop" separado do "stop_loss" (diferente do spot,
+que tem `trailing_exit` pra quando o preço já rompeu o nível antes do
+re-armamento conseguir acontecer) — o trailing em perp só move o MESMO
+stop real, então o fechamento sempre audita como `stop_loss`, só que no
+nível JÁ TRAILED. Essa era a última peça do bug #49 sem validação ao vivo
+(ver "PRÓXIMA AÇÃO" da sessão anterior) — agora fechada, nos dois lados
+(long confirmado 03:55:59, short confirmado ponta a ponta com trailing
+completo aqui).
+
+**6) Achado operacional novo: um `Monitor` persistente (armado na trilha)
+se perdeu no meio da sessão, sem eu perceber na hora.** Entre checar o
+estado por volta de 04:28 UTC e a pergunta seguinte do Lucas
+("QUANDO TERMINA O COOLDOWN ETH?"), um reconnect de app/MCP aconteceu (via
+notificações do sistema — servidores MCP caíram e voltaram) e o `Monitor`
+que eu tinha armado (`bpxd9ih1k`) morreu sem deixar registro de conclusão
+— só percebi porque o sistema avisou explicitamente ("No completion record
+was found"). Resultado prático: ~7 horas de eventos reais (incluindo o 2º e
+3º stop do dia, a entrada short, e a escalada do cooldown pro teto de 24h)
+aconteceram SEM eu saber em tempo real — só reconstruí tudo depois, lendo a
+trilha inteira (`tail`/`grep` em `logs/audit.jsonl`), quando o Lucas
+perguntou sobre o cooldown. **Lição pra sessões futuras**: um `Monitor`
+persistente pode morrer silenciosamente num reconnect/pausa de sessão longa
+— depois de qualquer gap de tempo real, SEMPRE reconciliar contra a trilha
+completa (`grep` pelos eventos críticos desde o último ponto confirmado)
+antes de assumir que nada aconteceu, nunca confiar cegamente em "o monitor
+teria me avisado". Um novo `Monitor` (`b4zc42168`) foi armado no restart das
+21:31:13 e segue ativo no fechamento deste handoff.
+
+**Estado da suíte de testes, atualizado**: **299/299 `test_smoke.py` + 8/8
+`test_ciclo.py` = 307/307 verde** — cresceu de 288/288 (280+8) com a seção
+31 (trailing perp) agora genuinamente executada e passando, mais o fix do
+fixture. Ver seção "Testes" mais abaixo.
 
 ## Sessão 28-29/07/2026 — perp/short religados, dois bugs estruturais achados e corrigidos
 
@@ -2501,7 +2802,20 @@ do agente).
    atualizadas~~ — **FEITO pelo Lucas em 18/07** (descrição v2 + instruções
    v4 coladas na UI). Os arquivos `RASCUNHO-*-colar-manualmente.md` ficam
    como registro do que foi colado; próxima atualização só quando o estado
-   do projeto mudar de fase.
+   do projeto mudar de fase. **Desde então, v8 (27/07) e v9 (28/07) foram
+   criadas mas NUNCA coladas** (cada uma superseded pela seguinte antes do
+   Lucas colar — mesmo padrão da v6→v7). **`RASCUNHO-instrucoes-v10-colar-manualmente.md`
+   criado em 30/07/2026** (a pedido do Lucas, "documente tudo... atualize
+   claudemd, readme, instruções v9 e descrição se for necessário" — fecha
+   o ciclo de validação ao vivo do perp long/short, cooldown 3 níveis,
+   trailing real, suíte 307/307), substitui a v9. **A descrição
+   (`RASCUNHO-descricao-v2-colar-manualmente.md`) foi revisada nesta
+   sessão e continua válida sem mudança** — descreve a arquitetura/
+   filosofia estável do sistema, nada no que mudou hoje (perp religado,
+   trailing validado, cooldown escalado) altera esse texto. **O Lucas
+   ainda precisa colar a v10 manualmente** nas instruções do Claude
+   Project, substituindo o que estiver lá (provavelmente ainda a v7,
+   já que v8/v9 nunca foram coladas).
 6. **Engenharia (21/07): resposta à pergunta "o que fazer pra evoluir a
    engenharia do projeto?"** Duas frentes identificadas, fora da linha de
    pesquisa de estratégia: (a) ~~persistência do kill switch~~ — **FEITA e
@@ -2731,14 +3045,21 @@ desde 19:29Z sem `signal_approved` correspondente) — cheque se houve
 
 ## Testes (em `tests/`)
 
-**Atualização 28-29/07/2026 (sessão perp)**: contagem CONFIRMADA mais
-recente é **288/288** (280 `test_smoke.py` + 8 `test_ciclo.py`) — seção 30
-nova (10 sub-testes, fechamento auditado em perp + cancelamento de ordem
-órfã, bug #49). Existe uma seção 31 A MAIS (9 sub-testes, trailing real em
-perp) **já escrita mas NUNCA RODADA** — ver "PRÓXIMA AÇÃO" no topo do
-arquivo antes de considerar qualquer contagem abaixo desta atual. O resto
-desta seção (contagens antigas, 165/199/265 etc.) é histórico — não
-reflete o estado atual do arquivo de testes.
+**Atualização 29-30/07/2026 (suíte confirmada + fix de fixture)**: contagem
+CONFIRMADA mais recente é **299/299 `test_smoke.py` + 8/8 `test_ciclo.py`
+= 307/307** — cresceu de 288/288 com a seção 31 (9 sub-testes, trailing
+real em perp) agora genuinamente EXECUTADA e passando. Na 1ª rodada desta
+sessão, 2 dos 9 sub-testes da seção 31 falharam — não por bug no motor,
+mas por um bug no PRÓPRIO fixture de teste (`FakePerpExit.fetch_order`
+lia `FakePerpExit.ORDER_RESPONSES` da classe-base em vez de
+`type(self).ORDER_RESPONSES`, mascarando os cenários de cura de arquivo
+stale e de abortar com stop já fechado — ver "Sessão 29-30/07/2026" acima
+pro relato completo). Corrigido, suíte 100% verde na 2ª rodada. Validado
+ao vivo na sequência: trailing moveu de verdade 5x numa posição short real
+e fechou pelo stop já trailed — a última peça do bug #49 que faltava
+confirmação fora de teste. O resto desta seção (contagens antigas,
+165/199/265/288 etc.) é histórico — não reflete o estado atual do arquivo
+de testes.
 
 `tests/test_smoke.py` (165 checks — 156 + 9 novos das seções 24-25,
 CONFIRMADOS verdes numa rodada completa com o motor parado (ver bug #31/#32
@@ -2873,3 +3194,118 @@ anterior da suíte, sem perda aparente).
   hoje um jeito de reiniciar só o processo do MCP sem reiniciar o app
   inteiro). Ferramentas do MCP (`trader_halt_status` etc.) podem continuar
   reportando comportamento ANTIGO por horas se isso for esquecido.
+
+## Análise da amostra real de trades (18/08/2026) — o motor funciona, a estratégia não
+
+Feita a pedido do Lucas ("estudo pra melhorar o PnL"). Amostra: **os 43
+`trade_closed` de MAINNET com dinheiro real**, 28/07 → 18/08 (os 11 do PC1
++ os 32 do PC2 — a trilha do PC1 tem os 4 primeiros dias de perp, a do PC2
+o resto). Metodologia: cada `trade_closed` pareado com o `order_executed`
+imediatamente anterior do mesmo símbolo (one-way mode: nunca há duas
+posições abertas no mesmo símbolo — confirmado lendo a trilha crua). R
+calculado com o risco REAL do trade (`trail_distance` × tamanho realmente
+preenchido), não com o risco teórico do YAML. **Ressalva de método**: uma
+primeira passada usou pareamento FIFO e produziu um MFE absurdo (+8,14R) —
+era artefato de posições herdadas sem `order_executed` na mesma trilha.
+Refeito e conferido contra a trilha crua antes de reportar. Nenhum número
+aqui vem de estimativa, exceto a fee (ver abaixo).
+
+### Os números
+
+| Métrica | Valor |
+|---|---|
+| Trades | 43 (28/07→18/08) |
+| PnL bruto (como a trilha reporta) | **−4,29 USDT** |
+| Fee estimada (taker 0,055%/lado × 2) | **−2,24 USDT** |
+| **PnL líquido real** | **≈ −6,54 USDT** |
+| Em R: bruto / líquido | **−12,46R / −21,73R** |
+| Win rate | **28%** (12/43) |
+| Ganho médio / perda média | +0,78R / −0,70R |
+| **Payoff ratio** | **1,11** |
+| **Payoff necessário pro break-even** | **2,58** |
+| Fechamentos por `stop_loss` | 38/43 (88%) — só 3 por `take_profit` |
+| Duração mediana | 1.336 min (**22h**) |
+| Stop inicial mediano | **0,58% do preço** |
+
+**A trilha reporta PnL BRUTO — `trade_closed.pnl_usdt` é `(exit−entry)×size`,
+sem fee.** Isso não é bug (o campo sempre foi assim), mas significa que todo
+número de PnL já reportado neste projeto está otimista. Com nocional médio
+de 47 USDT e fee taker de 0,055%/lado, cada trade paga ~0,052 USDT ida+volta
+= **22% de 1R**. A fee sozinha responde por ~43% do prejuízo líquido.
+
+### Os quatro achados que explicam o resultado
+
+**1. A matemática não fecha, por larga margem.** Win rate 28% com payoff
+1,11 é estruturalmente perdedor: precisaria de payoff **2,58** só pra
+empatar (antes da fee). Não é azar nem amostra pequena demais — é o desenho.
+Profit factor 0,37.
+
+**2. O sistema entrega 79% dos trades a favor e converte quase nada.** 34
+dos 43 trades chegaram a mover o trailing (ou seja: ficaram lucrativos em
+algum momento) — e **65% desses fecharam no vermelho**. MFE (máximo
+movimento a favor) mediano: **+0,65R**. O mercado dá ~0,65R e tira de volta.
+Casos concretos: 17/08 ETH short chegou a +0,80R com 12 movimentos de
+trailing e fechou −0,23R; 07/08 ETH short +0,79R (8 movimentos) → −0,21R.
+
+**3. O `tp_rr: 2.0` é inalcançável no comportamento observado.** O MFE
+**máximo de toda a amostra foi +1,78R** — nenhum trade em 43 chegou perto de
+2R. Por isso só 3 fecharam por `take_profit`. O alvo está fora do alcance do
+que este mercado/estratégia entrega, então na prática **todo trade termina
+no stop**, e o trailing decide se é um stop pequeno ou um lucro raspado.
+
+**4. Stop dentro do ruído.** Stop mediano de **0,58% do preço** numa posição
+que dura **22h de mediana**. A oscilação normal de ETH/BTC em 22h é
+múltiplas vezes isso — o stop é atingido por ruído, não por invalidação de
+tese. Consequência secundária: stop apertado → nocional grande pro mesmo
+risco em USDT → **fee proporcionalmente enorme (22% de 1R)**.
+
+**Achado colateral, novo, não é bug**: o tamanho pedido é truncado pelo
+step da exchange (ETH 0,01; BTC 0,001) — na média, **26% menor** que o
+calculado pelo `RiskManager` (ex.: pede 0,0486 ETH, preenche 0,04). Erra
+pro lado conservador (risco real menor que o planejado), mas distorce o
+sizing e piora a fee relativa. Com equity pequeno, o arredondamento é
+grosseiro.
+
+### O que os dados sugerem (nenhuma dessas mudanças foi aplicada)
+
+Ordenado por força da evidência. **Nada aqui é mudança de parâmetro de
+risco autorizada** — todas exigem decisão explícita do Lucas (regra
+inegociável #2).
+
+1. **Baixar `tp_rr` de 2.0 pra ~0,6–0,75.** É a mudança mais direta e mais
+   sustentada pelos dados: a mediana do que o mercado oferece é 0,65R e
+   22 trades morreram depois de estarem a favor. Um alvo dentro do alcance
+   converteria boa parte deles. Testável no backtester antes de ir ao vivo.
+2. **Alargar o stop (multiplicador de ATR maior).** Ataca a causa raiz de
+   (4) e, de quebra, derruba a fee relativa: stop 3x mais largo = nocional
+   3x menor pro mesmo risco em USDT = fee cai de 22% pra ~7% de 1R.
+   Contrapartida: menos trades, e cada perda continua valendo 1R.
+3. **Trocar entrada a mercado por ordem limit (maker).** A fee é 43% do
+   prejuízo. Maker na Bybit é ~0,02% (vs 0,055% taker). Mudança de
+   arquitetura no `executor.py`, com risco novo real (ordem que não
+   preenche), não é toggle de YAML — projeto próprio.
+4. **Reduzir frequência.** 43 trades em 21 dias com edge negativo é
+   sangramento por fricção. Menos entradas e mais seletivas.
+5. **Descasamento de horizonte**: o perfil `daytrade` produz trades que
+   duram 22h de mediana. Ou o perfil vira swing de fato, ou o timeframe de
+   decisão precisa ser coerente com o tempo de vida real da posição.
+
+**A conclusão honesta, e ela é maior que qualquer ajuste de parâmetro:**
+estes 43 trades reais **confirmam o que a pesquisa já dizia**. As duas
+rodadas de walk-forward (`research/RELATORIO-2026-07-16.md` e
+`RELATORIO-2026-07-21-pesquisa-2b.md`, datasets independentes) concluíram
+que a família EMA20/50+RSI — a que o robô usa — é a **PIOR das 6 testadas**
+(mediana WF −3,40% e −29,82%, 0/18 e 0/10 séries positivas). O resultado ao
+vivo é exatamente isso, agora com dinheiro real. Os itens 1–5 acima são
+otimizações de gestão de saída numa estratégia sem edge comprovado: podem
+levar de −0,29R/trade pra perto de zero, dificilmente a lucro consistente.
+**O trabalho pesado que o Lucas mencionou é encontrar uma fonte de edge —
+não afinar stop e TP.** O caminho já registrado nos "Próximos passos"
+(item 3) continua valendo: dado novo, famílias novas, e verificação
+adversarial antes de promover qualquer coisa a capital real.
+
+**O que NÃO está quebrado**: o motor. 18 dias de operação contínua, zero
+kill switch, zero posição nua, zero falha de fechamento, trailing movendo
+105 vezes de verdade, cooldown escalando pelos 3 níveis, supervisor
+religando sozinho depois de um crash de console. A engenharia está pronta
+pra rodar uma estratégia boa — só não tem uma ainda.

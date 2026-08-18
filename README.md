@@ -5,10 +5,29 @@ de risco** e supervisão humana. Arquitetura em camadas: o motor de decisão
 **propõe** sinais; a camada de risco tem **poder de veto absoluto** e calcula
 o sizing; o executor só envia ordens já aprovadas.
 
-> **Fase atual:** estratégia determinística (sem LLM) + testnet. Mercado migrado
-> para SPOT (`market.type: "spot"` em `config/risk_config.yaml`) — a Bybit bloqueou
-> derivativos para residentes do Brasil (ver `INSTRUCOES-PROJETO-v2.md`, seção 10).
-> O Claude entra na geração de sinal só na Fase 3, usando o mesmo contrato `Signal`.
+> **Fase atual:** estratégia determinística (sem LLM) + mainnet. Mercado religado
+> para PERP (`market.type: "perp"` em `config/risk_config.yaml`, 28/07/2026) — o
+> bloqueio de compliance da Bybit para derivativos em conta BR (visto em 15/07)
+> não se repetiu; long e short confirmados ao vivo, ponta a ponta (entrada,
+> trailing real, fechamento auditado, cooldown por símbolo), com dinheiro real.
+> Teto de alavancagem 2x, teto de capital 50% do equity por trade (decisões do
+> Lucas). O Claude entra na geração de sinal só na Fase 3, usando o mesmo
+> contrato `Signal`.
+>
+> **Onde o motor roda (18/08/2026):** SOMENTE no **PC2** (`C:\BybitAutoTrader`),
+> mainnet, `--live`, 24h. A pasta sincronizada (PC1) é **só dev/documentação** —
+> as duas máquinas usam a MESMA conta mainnet, então rodar `--live` nas duas ao
+> mesmo tempo é proibido por segurança. A trilha de auditoria que vale é a do
+> PC2 (`C:\BybitAutoTrader\logs\audit.jsonl`); a do PC1 está congelada desde
+> 31/07/2026. O `.mcp.json` do PC1 está **em standby** (aponta pra um caminho
+> antigo que não existe mais) — o servidor MCP vivo é o do PC2.
+>
+> **Resultado real até aqui (28/07 → 18/08, 43 trades com dinheiro real):**
+> −4,29 USDT bruto / ≈ −6,54 USDT líquido de fee, win rate 28%, payoff 1,11.
+> A engenharia está sólida (18 dias contínuos, zero kill switch, zero posição
+> nua, trailing e cooldown funcionando ao vivo); **a estratégia é que ainda não
+> tem edge** — o mesmo veredito das duas rodadas de walk-forward em
+> `research/`. Ver a seção "Análise da amostra real de trades" no `CLAUDE.md`.
 >
 > **Este README é referência de arquitetura/instalação, não status do dia.** Para
 > o estado exato agora (o que rodou, o que travou, decisões em aberto), leia
@@ -118,10 +137,11 @@ padrão de rodar em produção; `main.py` direto continua válido pra teste manu
 
 | Parâmetro | Padrão | O que faz |
 |---|---|---|
-| `market.type` | `"spot"` | `"perp"` (derivativos) ou `"spot"` (à vista); em spot, short é vetado e alavancagem forçada a 1 |
+| `market.type` | `"perp"` | `"perp"` (derivativos, long+short) ou `"spot"` (à vista); em spot, short é vetado e alavancagem forçada a 1 |
 | `per_trade.risk_pct` | 0.5% | risco por trade; define o sizing pela distância do stop |
 | `per_trade.require_stop_loss` | true | sem stop, o trade é vetado |
-| `per_trade.max_leverage` | 3x | teto de alavancagem (irrelevante em spot) |
+| `per_trade.max_leverage` | 2x | teto de alavancagem (irrelevante em spot) — `min(max_leverage, necessária)`, nunca forçado |
+| `per_trade.max_notional_pct_equity` | 50% | teto de capital por trade individual (clampa, nunca veta) |
 | `portfolio.max_open_positions` | 3 | nº máx. de posições simultâneas |
 | `portfolio.max_total_exposure_mult` | 2.0 | exposição nocional máx. (× capital) |
 | `drawdown.max_daily_drawdown_pct` | 3% | dispara **kill switch** (trava entradas) |
@@ -288,17 +308,27 @@ verdade sobre o que fechou; `CLAUDE.md` tem o estado exato do dia. Resumo:
 - **Fase 4** — supervisão via MCP: servidor registrado e validado ponta a ponta;
   ganhou watchdog agendado + restart automático do processo (`supervisor.py`).
 - **Fase 5** — mainnet, size mínimo: **iniciada em 27/07/2026** (spot, ~24 USDT
-  de equity, decisão explícita do Lucas) — derivativos/perp continuam
-  bloqueados pra residente BR, mas SPOT não estava e foi confirmado ao vivo
-  (leitura de saldo real + ciclo aprovando entrada real). **Primeiro trade
-  real executado na madrugada de 28/07/2026** (ETH/USDT long); ver
-  `CLAUDE.md` ("27/07/2026 — O DIA DA TRANSIÇÃO") pro relato completo,
-  incluindo a auditoria de segurança rodada antes e um incidente de
-  compliance da Bybit (bloqueio no rearme do trailing stop) ainda em
-  aberto (intermitente — o trailing já moveu com sucesso mais de uma vez).
+  de equity, decisão explícita do Lucas). **Religado para PERP em
+  28/07/2026** — o bloqueio de compliance de 15/07 para derivativos em
+  conta BR não se repetiu (confirmado por sonda antes da virada); teto de
+  alavancagem 2x e teto de capital 50%/trade. **Ciclo completo validado ao
+  vivo nos dois lados (29-30/07/2026)**: entrada, trailing real (moveu
+  várias vezes seguidas), fechamento auditado com PnL correto, cooldown
+  escalando pelos 3 níveis (30min/60min/24h) no mesmo dia, e reset manual
+  de cooldown via MCP — tudo confirmado em LONG e em SHORT, com dinheiro
+  real. Ver `CLAUDE.md` ("Sessão 29-30/07/2026") pro relato completo.
+  **Operação 24h migrada para o PC2 em 31/07/2026** (mesma conta mainnet —
+  o PC1 nunca mais roda `--live` sem parar o PC2 antes). **18 dias contínuos
+  verificados em 18/08/2026**: 43 trades reais, mecânica impecável (zero kill
+  switch, zero posição nua, zero falha de fechamento; um único crash de
+  console religado sozinho pelo `supervisor.py`), mas **PnL negativo**
+  (≈ −6,54 USDT líquido, win rate 28%, payoff 1,11 contra os 2,58 que o
+  break-even exigiria). Diagnóstico completo em `CLAUDE.md`, seção "Análise
+  da amostra real de trades".
 - **Fase 6** — expansão (universo completo, ranking, infra 24/7): alerta ativo
   + restart automático feitos; fonte on-chain em tempo real (decisão #G)
-  implementada; resto (universo, ranking) não iniciado.
+  implementada; resto (universo, ranking) não iniciado. Watchdog e dossiê
+  recriados apontando pro PC2 (`trader-watchdog-pc2`, `dossie-cripto-pc2`).
 
 Não marque uma fase como concluída aqui sem checar o critério de fechamento na
 seção 7 de `INSTRUCOES-PROJETO-v2.md` — um Roadmap desatualizado com ✅ prematuro
