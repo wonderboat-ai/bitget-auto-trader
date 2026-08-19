@@ -184,10 +184,23 @@ Medido nos **trades reais** (32 pareados com `trailing_stop_moved` na trilha):
 - **90,6% das saídas ocorreram com recuo de 0,95–1,05R do pico** — exatamente a
   distância do trailing, toda vez. Se o stop estivesse sendo fisgado por
   agulhadas curtas, o recuo seria muito menor que 1R.
-- MFE mediano: **+0,597R**. Máximo em 43 trades: **+1,777R**.
+- MFE mediano: **+0,597R**.
 - Só **31%** dos trades chegaram a MFE ≥ 1,00R — que é o mínimo para o stop
   movido passar do breakeven. Nos outros 69%, o trailing **só reduziu a perda**
   (perda média real −0,703R em vez de −1R).
+
+> ⚠️ **Correção de 19/08/2026 — erro de medição meu.** A versão original desta
+> seção afirmava "MFE máximo +1,777R, logo `tp_rr: 2.0` nunca foi alcançável".
+> **Está errado.** O MFE foi calculado do `peak_price` dos eventos
+> `trailing_stop_moved`, campo que **só atualiza quando o trailing move** — num
+> fechamento por TP o último movimento é ANTES do alvo, então a métrica
+> subestima exatamente os melhores trades. Conferido trade a trade: nos **4**
+> fechamentos por `take_profit` o R real superou o MFE medido (+0,26 / +0,88 /
+> +0,37 / +0,12 R), e em **todos** os 31 por stop o R real ficou ≤ MFE. `tp_rr:
+> 2.0` **é alcançável** e já foi atingido 4 vezes (R real +1,954 / +2,048 /
+> +1,991 / +1,995). A recomendação de **não** baixar `tp_rr` não muda: ela vem do
+> walk-forward, não desta métrica. Para MFE confiável seria preciso reconstruir
+> do OHLCV do período de cada trade, não da trilha de auditoria.
 
 Ou seja: o stop não está sendo fisgado; ele está fazendo exatamente o que foi
 configurado. O problema é que o preço raramente anda a favor o suficiente.

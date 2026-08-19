@@ -22,12 +22,24 @@ o sizing; o executor só envia ordens já aprovadas.
 > 31/07/2026. O `.mcp.json` do PC1 está **em standby** (aponta pra um caminho
 > antigo que não existe mais) — o servidor MCP vivo é o do PC2.
 >
-> **Resultado real até aqui (28/07 → 18/08, 43 trades com dinheiro real):**
-> −4,29 USDT bruto / ≈ −6,54 USDT líquido de fee, win rate 28%, payoff 1,11.
-> A engenharia está sólida (18 dias contínuos, zero kill switch, zero posição
-> nua, trailing e cooldown funcionando ao vivo); **a estratégia é que ainda não
-> tem edge** — o mesmo veredito das duas rodadas de walk-forward em
-> `research/`. Ver a seção "Análise da amostra real de trades" no `CLAUDE.md`.
+> **Perfil de 15 minutos DESLIGADO em 18/08/2026**
+> (`trading.profiles.daytrade.enabled: false`). Só o perfil `swing` (4h) opera.
+> Causa: com o teto de nocional de 50% do equity mordendo em 90% dos sinais
+> reais, o nocional fica constante e a fee vira fração fixa dele, enquanto 1R
+> encolhe com a distância do stop — a identidade é `fee/R = 0,11% ÷ stop%`. Em
+> 15m o stop mediano é 0,40% do preço, então a fee comia **~27% de cada 1R**;
+> em 4h são ~7-9%. Medido em BTC+ETH nos últimos 12 meses, o perfil de 15m dava
+> mediana −97,20%. **Espere bem menos operações — é o desenho, não falha.**
+>
+> **Resultado real até aqui (28/07 → 19/08, 52 trades com dinheiro real):**
+> +2,90 USDT bruto / **+0,02 USDT líquido** de fee, win rate 34,6%. Ou seja:
+> 21 dias de operação produziram exatamente o suficiente para pagar a corretora
+> (fee acumulada 2,88 contra lucro bruto 2,90). A engenharia está sólida (zero
+> kill switch, zero posição nua, zero falha de fechamento, trailing e cooldown
+> funcionando ao vivo); **a estratégia é que ainda não tem edge** — veredito
+> reconfirmado por uma TERCEIRA rodada de pesquisa (18/08, perp long+short,
+> painel adversarial de 9 agentes, decisão unânime de não promover). Ver
+> `research/RELATORIO-2026-08-18-pesquisa-3-perp.md`.
 >
 > **Este README é referência de arquitetura/instalação, não status do dia.** Para
 > o estado exato agora (o que rodou, o que travou, decisões em aberto), leia
@@ -299,9 +311,17 @@ verdade sobre o que fechou; `CLAUDE.md` tem o estado exato do dia. Resumo:
 - **Fase 1** — motor determinístico + risco + execução em testnet: **fechada
   (19/07)** — entrada, proteção e saída lucrativa automática confirmadas 1:1
   contra a exchange real.
-- **Fase 2** — backtest + walk-forward com dados reais: rodada em 15/07 + duas
-  rodadas de pesquisa de estratégia (21/07, 22/07); veredito final "sem edge,
-  não promover" após verificação adversarial completa — ver `CLAUDE.md`.
+- **Fase 2** — backtest + walk-forward com dados reais: rodada em 15/07 + **três**
+  rodadas de pesquisa de estratégia (21/07, 22/07 e 18/08); veredito final "sem
+  edge, não promover" nas três, sempre após verificação adversarial. A rodada de
+  18/08 foi a primeira a medir a configuração REAL de produção (perp long+short,
+  fee 0,055%) — as duas anteriores mediam spot long-only com fee 0,1%, ou seja
+  metade do sistema. **Achado que muda o método daqui pra frente:** o critério
+  de aceitação que vinha sendo usado ("mediana > 0 com maioria dos símbolos
+  positiva") **não discrimina nada** — uma grade ingênua de 300 configurações de
+  tendência dá 100% de medianas positivas na mesma janela. Foi ele que aprovou
+  os falsos positivos das três rodadas. Ver
+  `research/RELATORIO-2026-08-18-pesquisa-3-perp.md` para o critério novo exigido.
 - **Fase 3** — camada de decisão Claude: código pronto e **endurecido** (revisão
   adversarial de 22/07, 15 achados corrigidos), ainda **desligada**
   (`decision.strategy: deterministic`).
@@ -318,17 +338,21 @@ verdade sobre o que fechou; `CLAUDE.md` tem o estado exato do dia. Resumo:
   de cooldown via MCP — tudo confirmado em LONG e em SHORT, com dinheiro
   real. Ver `CLAUDE.md` ("Sessão 29-30/07/2026") pro relato completo.
   **Operação 24h migrada para o PC2 em 31/07/2026** (mesma conta mainnet —
-  o PC1 nunca mais roda `--live` sem parar o PC2 antes). **18 dias contínuos
-  verificados em 18/08/2026**: 43 trades reais, mecânica impecável (zero kill
-  switch, zero posição nua, zero falha de fechamento; um único crash de
-  console religado sozinho pelo `supervisor.py`), mas **PnL negativo**
-  (≈ −6,54 USDT líquido, win rate 28%, payoff 1,11 contra os 2,58 que o
-  break-even exigiria). Diagnóstico completo em `CLAUDE.md`, seção "Análise
-  da amostra real de trades".
+  o PC1 nunca mais roda `--live` sem parar o PC2 antes). **22 dias contínuos
+  até 19/08/2026**: 52 trades reais, mecânica impecável (zero kill switch,
+  zero posição nua, zero falha de fechamento; um único crash de console
+  religado sozinho pelo `supervisor.py`). **PnL líquido em +0,02 USDT** —
+  praticamente zero, com a fee acumulada (2,88) devorando o lucro bruto
+  (2,90). Perfil de 15m desligado em 18/08 por fricção estrutural (ver topo
+  deste README). Diagnóstico completo em `CLAUDE.md`.
 - **Fase 6** — expansão (universo completo, ranking, infra 24/7): alerta ativo
   + restart automático feitos; fonte on-chain em tempo real (decisão #G)
-  implementada; resto (universo, ranking) não iniciado. Watchdog e dossiê
-  recriados apontando pro PC2 (`trader-watchdog-pc2`, `dossie-cripto-pc2`).
+  implementada; resto (universo, ranking) não iniciado. O dossiê agendado
+  (`dossie-cripto-pc2`) segue ligado, mas o **watchdog (`trader-watchdog-pc2`)
+  está EM STANDBY desde 18/08/2026** por decisão do Lucas — **não há mais
+  supervisão automática fora de sessão**. Dentro de uma sessão dá para armar um
+  monitor na trilha (que também precisa vigiar ausência de batimento: se o motor
+  morre, a trilha só para de crescer, e um filtro que só procura erro fica mudo).
 
 Não marque uma fase como concluída aqui sem checar o critério de fechamento na
 seção 7 de `INSTRUCOES-PROJETO-v2.md` — um Roadmap desatualizado com ✅ prematuro
