@@ -1,16 +1,82 @@
-# CLAUDE.md — Bybit Auto Trader (handoff 2026-08-18 noite, 15m desligado, pesquisa 3 fechada)
+# CLAUDE.md — Bybit Auto Trader (handoff 2026-08-19, 1º dia lucrativo, acumulado ~zero)
 
 Contexto vivo do projeto para agentes (Claude Code/Cowork). Fonte completa de
-regras: `INSTRUCOES-PROJETO-v2.md` v2 + `RASCUNHO-instrucoes-v10-colar-manualmente.md`
-(v10, criado 30/07 — ver "Status atual" lá; ainda NÃO colada nas instruções
-do Claude Project — substitui a v9, que nunca chegou a ser colada, mesmo
-padrão da v6→v7 e v8→v9). Guia operacional humano: `PASSO-A-PASSO.md` (bootstrapping
-testnet — todas as etapas fechadas, ver seu próprio aviso de topo). Idioma
+regras: `INSTRUCOES-PROJETO-v2.md` v2 + `RASCUNHO-instrucoes-v11-colar-manualmente.md`
+(v11, criado 19/08 — ver "Status atual" lá; ainda NÃO colada nas instruções
+do Claude Project — substitui a v10, que nunca chegou a ser colada, mesmo
+padrão da v6→v7, v8→v9 e v9→v10). Guia operacional humano: `PASSO-A-PASSO.md`
+(bootstrapping testnet — todas as etapas fechadas, ver seu próprio aviso de topo);
+`PASSO-A-PASSO-18-08-2026.md` (as 3 ações manuais do Lucas). Idioma
 de trabalho: português do Brasil. Comentários de código explicam causa raiz.
 
 ## PRÓXIMA AÇÃO (ler antes de qualquer outra coisa)
 
-### Status verificado em 18/08/2026 ~21:30 UTC — config NOVA no ar (15m DESLIGADO), pesquisa 3 fechada
+### Status verificado em 19/08/2026 ~20:00 UTC — motor 23,5h de pé, MELHOR DIA da história, acumulado ainda ~zero
+
+**Motor VIVO no PC2** (`engine_start` 18/08 20:26:50 UTC, `dry_run: false`),
+23,5 h contínuas, ciclos de ~62s, kill switch livre, **zero eventos críticos e 1
+único erro de ciclo em 24h**. **Nenhuma posição aberta** neste instante — conta
+100% em caixa, zero ordens pendentes na Bybit (checado na exchange, sem órfãs).
+**Equity 188,87 USDT.** Cooldowns livres nos dois símbolos (contadores do dia
+preservados: BTC 2 acionamentos, ETH 1 — próximo stop do BTC já escala pro teto).
+
+**19/08 foi o melhor dia da história da conta: 9 trades (6 take-profit, 3 stop),
++7,054 brutos → +6,418 USDT LÍQUIDOS.** Sozinho, tirou o acumulado de −6,5 para
+perto de zero.
+
+**Mas o acumulado de 22 dias segue negativo: 53 trades, acerto 34,0%, +2,591
+brutos, 2,951 de fee → −0,360 USDT líquido.** O número que resume o projeto:
+**a fee acumulada é MAIOR que todo o lucro bruto** — 22 dias de operação ainda
+não pagaram a corretora.
+
+**Nada disso contradiz a pesquisa.** O dia foi um melt-up de +5,9% em BTC e
++8,8% em ETH (candle de 15m com +3,04% e volume 4-15x o normal — verificado no
+OHLCV, não é anomalia de dado). Seguidor de tendência com alvo em 2R colhe
+exatamente aí. **6 trades de 53 responderam por todo o movimento** — é a mesma
+concentração que o painel adversarial apontou como fragilidade, agora aparecendo
+a favor. Confirma a fragilidade da amostra, não estabelece edge.
+
+**O que mudou de forma permanente foi o custo**, e é consequência direta de
+desligar o 15m: as entradas novas do swing saem com `capped: false` e fee de
+**~8-9% de 1R**, contra os ~27% que o perfil de 15m pagava. Confirmado trade a
+trade ao vivo.
+
+**MUDANÇAS DESTA SESSÃO (18-19/08), todas já em `main` e no PC2:**
+1. **Perfil 15m desligado** (`daytrade.enabled: false`) — commit `e30a72b`,
+   aplicado no PC2 via `git pull`. Confirmado ao vivo: só `swing` é avaliado.
+2. **Cooldowns dos dois símbolos resetados manualmente** a pedido do Lucas
+   (18/08 20:58 e 20:59 UTC), via `state/control.json` escrito à mão — o MCP do
+   PC1 está em standby. **O engine aprovou entrada em ETH 3 segundos depois.**
+3. **Bug #50 corrigido** (`tests/_guard.py`) — a suíte destruía a trilha.
+4. **Trilha do PC1 restaurada pelo Lucas** via histórico do Dropbox (15.860
+   linhas). Ver ressalva abaixo.
+
+**PENDÊNCIAS DO LUCAS (2):**
+1. **Colar o bloco `permissions` em `~/.claude/settings.json`** (conteúdo pronto
+   em `PASSO-A-PASSO-18-08-2026.md`). Tentei aplicar e **o classificador de auto
+   mode bloqueou, corretamente** — seria auto-concessão de permissão. Sem isso,
+   qualquer tarefa agendada segue pedindo autorização a cada execução.
+2. **`git pull` no PC2 na próxima parada natural do motor**, para levar a
+   documentação nova (commits `fa7c08c` em diante). Não puxei com o motor
+   rodando — o commit só tem `.md` e o risco seria nulo, mas a regra do projeto
+   é categórica e não vale abrir exceção que vira hábito.
+
+**Ressalva na trilha restaurada do PC1** (não urgente, PC1 não opera): a linha
+15860 é um `audit_maintenance` com **JSON inválido** (`Invalid \escape`, provável
+caminho Windows sem escapar) — consequência: o registro que documenta a
+restauração é **pulado silenciosamente por todo leitor** (`_read_audit` e
+`backfill_from_audit` capturam `JSONDecodeError` e seguem). E a linha 15859 é
+resíduo de teste meu (`take_profit_skipped` sintético, tp=110.0). Ambos pedem
+cirurgia de trilha, que neste projeto exige autorização explícita (3 precedentes).
+
+**Supervisão:** o `trader-watchdog-pc2` agendado segue **EM STANDBY** — não há
+supervisão automática fora de sessão. Dentro da sessão, `scratchpad/vigia.py`
+monitora a trilha (eventos críticos + movimento de dinheiro + **ausência de
+batimento**, que é o que pega o motor morrendo — um filtro que só procura erro
+fica mudo nesse caso). Ele morre com a sessão. **Regra que continua valendo:
+depois de qualquer intervalo sem sinal, reconciliar contra a trilha inteira.**
+
+### (histórico) Status de 18/08/2026 ~21:30 UTC — config NOVA no ar (15m DESLIGADO), pesquisa 3 fechada
 
 **Motor VIVO no PC2** (`engine_start` 20:26:50 UTC, `dry_run: false`), rodando a
 config nova do commit `e30a72b`. Ciclos a cada 62s, zero erro, kill switch livre.
@@ -259,6 +325,108 @@ confiável aqui). Fora isso, nada pendente: considerar reavaliar os números
 de risco do YAML (cooldown 30/60/1440min, teto de capital 50%, alavancagem
 2x) — já é pendência aberta desde a v9 das instruções (carregada pra v10), e agora já tem
 operação real (long+short) suficiente pra dar ao Lucas uma base de decisão.
+
+## Sessão 19/08/2026 — 15m desligado propagado, cooldowns resetados, melhor dia da conta
+
+Continuação direta da sessão de 18/08. Quatro coisas aconteceram, nesta ordem.
+
+### 1) O motor não subiu na 1ª tentativa — e a causa virou o comando padrão novo
+
+O Lucas rodou o comando e reportou que tinha ligado. A trilha provou o contrário:
+**nenhum `engine_start`, zero processos python, `audit.jsonl` sem escrita desde o
+`engine_stop`**. Nem `engine_crash_restart` havia — ou seja, o `main.py` nunca
+chegou a rodar; o comando não executou.
+
+Confirmei que o boot estava saudável rodando `main.py --once` em **DRY-RUN**
+(seguro, nenhuma ordem real): bootou limpo, exit 0, e de quebra **provou o 15m
+desligado** (só o perfil `swing` foi avaliado, contra `daytrade`+`swing` antes).
+
+**Achado que virou a correção**: `supervisor.py` resolve os caminhos sozinho
+(`ROOT = Path(__file__).resolve().parent`, spawna `main.py` com `sys.executable`
+e caminho ABSOLUTO, `cwd=ROOT`). **Não precisa de `cd`.** Comando novo, imune à
+causa mais provável (o `cd` não pegar):
+
+    C:\BybitAutoTrader\.venv\Scripts\python.exe C:\BybitAutoTrader\supervisor.py --live
+
+Subiu de primeira. E como o supervisor usa `sys.executable`, **começar pelo
+python do venv garante que o filho herde o venv** — é exatamente por isso que
+`python` puro quebrava em 31/07: o filho nascia com o Python de sistema.
+
+### 2) Reconciliação da posição herdada — o caminho bom funcionou
+
+A posição BTC ficou aberta durante as ~3h15 de motor parado e **o stop disparou
+na Bybit nesse meio-tempo** (as ordens são reais; a corretora executa sozinha).
+No 1º ciclo após religar, `_check_perp_exits` detectou e apurou: entrada
+64.723,20 → saída 64.553,20, **pnl −0,17 USDT**, `reason: stop_loss`,
+**`exit_price_source: stop_order_fill`** — ou seja **confirmou o preenchimento
+real** via `fetch_order`, não caiu no modo degradado `external_close_unconfirmed`.
+Proteção limpa e **a ordem irmã (TP) cancelada** (0 ordens abertas na Bybit
+confirmado) — o risco do bug #49 tratado corretamente. Perda de −0,70R em vez de
+−1R porque o stop já tinha sido trailed: bate com a média histórica (−0,703R).
+
+### 3) Reset manual de cooldown SEM o MCP — como fazer
+
+O Lucas pediu para liberar os dois símbolos. **O MCP do PC1 está em standby**
+(`.mcp.json` aponta pra um caminho OneDrive que não existe mais), então
+`trader_reset_cooldown` não estava disponível. Escrevi `state/control.json` à
+mão, no formato exato que `mcp_server._write_control_signal` produz:
+
+```json
+{"action":"reset_cooldown","reason":"...","environment":"mainnet",
+ "ts":"<ISO UTC>","symbol":"BTC/USDT:USDT"}
+```
+
+**Três detalhes que importam:**
+- O campo `environment` é **obrigatório na prática**: `_apply_control_signal`
+  descarta o sinal (audita `control_signal_environment_mismatch`) se divergir do
+  ambiente do processo. Bug #33.
+- O engine **consome (unlink) o sinal a cada ciclo** e o arquivo aceita **UM
+  símbolo por vez** — resetar dois exige duas escritas separadas por ~1 ciclo.
+- Importar `config.settings` ANTES de qualquer coisa, senão `ENVIRONMENT` sai
+  errado (lição do bug #47).
+
+Funcionou nos dois: `cooldown_reset` auditado às 20:58:24 (BTC) e 20:59:26 (ETH).
+**E o motor aprovou entrada em ETH 3 segundos depois** — mesmo padrão de 29-30/07.
+
+### 4) O dia: 9 trades, +6,418 líquidos — e por que isso não é edge
+
+Entre 14:55 e 17:17 UTC o mercado teve um melt-up (BTC +5,9%, ETH +8,8% em 24h;
+um candle de 15m com **+3,04% e volume 22.954 contra os 1.300-6.500 típicos**).
+**Verifiquei no OHLCV que era movimento real, não anomalia de dado** — o projeto
+já teve um caso de anomalia de testnet (21/07) que custou 6 ciclos de perda.
+
+Resultado: **6 take-profits seguidos** (+8,799) e **3 stops** (−1,745) →
+**+6,418 USDT líquidos**. As duas perdas maiores foram reentradas perto do topo
+do spike (BTC a 69.090,70 quando o candle bateu 69.893,20), ambas −1R cravado.
+
+**Duas observações estruturais que valem mais que o número:**
+- **O TP realiza e protege o ganho.** Cada take-profit embolsou o lucro, então
+  quando o movimento reverteu a exposição era só o risco das posições abertas
+  (~1,9 USDT), não o ganho do dia. É o que a decisão de 28/07 (trailing e TP
+  fixo convivendo) comprou.
+- **O cooldown fez exatamente o trabalho dele**: depois dos stops no topo, pausou
+  os dois símbolos por 30min — impedindo a reentrada perseguindo uma reversão,
+  que é literalmente o cenário do bug #30 que criou o mecanismo.
+
+### 5) Lição de desenho de monitor: silêncio não é sucesso
+
+O vigia armado nesta sessão (`scratchpad/vigia.py`) vigia **ausência de
+batimento**, não só eventos ruins. Motivo: se o motor morre, a trilha só para de
+crescer — um filtro que só procura erro ficaria **mudo**, e mudo é
+indistinguível de "tudo bem". Como o ciclo é ~62s, silêncio acima de 5,5 min
+vira alerta. Ele também avisa se a trilha **encolher** (truncamento).
+
+Isso não é teórico: em 29-30/07 um monitor morreu silenciosamente num reconnect
+e ~7h de eventos reais passaram sem aviso.
+
+### 6) Correção de uma métrica minha — ver o aviso na seção do trailing
+
+Afirmei que "`tp_rr: 2.0` nunca foi alcançável, MFE máximo +1,777R". **Errado, e
+o erro era de MEDIÇÃO.** Detalhe completo no aviso ⚠️ dentro de "Sessão 18/08
+(noite) — item 4". Resumo: MFE calculado do `peak_price` dos eventos
+`trailing_stop_moved` subestima os trades que fecham no alvo, porque o campo só
+atualiza quando o trailing MOVE. `tp_rr: 2.0` já foi atingido 4 vezes — duas
+delas hoje, produzindo os melhores trades da conta.
 
 ## Sessão 18/08/2026 (noite) — pesquisa 3 (perp long+short), 15m desligado, trilha do PC1 destruída
 
@@ -3151,20 +3319,25 @@ do agente).
    atualizadas~~ — **FEITO pelo Lucas em 18/07** (descrição v2 + instruções
    v4 coladas na UI). Os arquivos `RASCUNHO-*-colar-manualmente.md` ficam
    como registro do que foi colado; próxima atualização só quando o estado
-   do projeto mudar de fase. **Desde então, v8 (27/07) e v9 (28/07) foram
-   criadas mas NUNCA coladas** (cada uma superseded pela seguinte antes do
-   Lucas colar — mesmo padrão da v6→v7). **`RASCUNHO-instrucoes-v10-colar-manualmente.md`
-   criado em 30/07/2026** (a pedido do Lucas, "documente tudo... atualize
-   claudemd, readme, instruções v9 e descrição se for necessário" — fecha
-   o ciclo de validação ao vivo do perp long/short, cooldown 3 níveis,
-   trailing real, suíte 307/307), substitui a v9. **A descrição
-   (`RASCUNHO-descricao-v2-colar-manualmente.md`) foi revisada nesta
-   sessão e continua válida sem mudança** — descreve a arquitetura/
-   filosofia estável do sistema, nada no que mudou hoje (perp religado,
-   trailing validado, cooldown escalado) altera esse texto. **O Lucas
-   ainda precisa colar a v10 manualmente** nas instruções do Claude
-   Project, substituindo o que estiver lá (provavelmente ainda a v7,
-   já que v8/v9 nunca foram coladas).
+   do projeto mudar de fase. **Desde então, v8 (27/07), v9 (28/07) e v10
+   (30/07) foram criadas mas NUNCA coladas** (cada uma superseded pela
+   seguinte antes do Lucas colar — mesmo padrão da v6→v7).
+   **`RASCUNHO-instrucoes-v11-colar-manualmente.md` criado em 19/08/2026**
+   (a pedido do Lucas, "atualiza o claudemd readme instruções push e commit"),
+   substitui a v10. O que a v11 traz de novo em relação à v10: perfil de 15m
+   desligado com a causa raiz (`fee/R = 0,11% ÷ stop%`); a TERCEIRA rodada de
+   pesquisa e seu veredito unânime; **o achado de que o critério de aceitação
+   não discrimina nada** (300/300 configs ingênuas passam); as duas
+   pré-condições de engenharia (saída por sinal é código morto em perp;
+   `side="long"` fixo inverteria o short); o conflito não resolvido com o kill
+   switch; o watchdog em standby; o comando novo sem `cd`; e a lição de que
+   `peak_price` não serve como proxy de MFE.
+   **A descrição (`RASCUNHO-descricao-v2-colar-manualmente.md`) foi revisada e
+   continua válida sem mudança** — descreve a arquitetura/filosofia estável do
+   sistema; nada que mudou desde então altera esse texto. **O Lucas ainda
+   precisa colar a v11 manualmente** nas instruções do Claude Project,
+   substituindo o que estiver lá (provavelmente ainda a v7, já que v8/v9/v10
+   nunca foram coladas).
 6. **Engenharia (21/07): resposta à pergunta "o que fazer pra evoluir a
    engenharia do projeto?"** Duas frentes identificadas, fora da linha de
    pesquisa de estratégia: (a) ~~persistência do kill switch~~ — **FEITA e

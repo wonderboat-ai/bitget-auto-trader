@@ -31,10 +31,15 @@ o sizing; o executor só envia ordens já aprovadas.
 > em 4h são ~7-9%. Medido em BTC+ETH nos últimos 12 meses, o perfil de 15m dava
 > mediana −97,20%. **Espere bem menos operações — é o desenho, não falha.**
 >
-> **Resultado real até aqui (28/07 → 19/08, 52 trades com dinheiro real):**
-> +2,90 USDT bruto / **+0,02 USDT líquido** de fee, win rate 34,6%. Ou seja:
-> 21 dias de operação produziram exatamente o suficiente para pagar a corretora
-> (fee acumulada 2,88 contra lucro bruto 2,90). A engenharia está sólida (zero
+> **Resultado real até aqui (28/07 → 19/08, 53 trades com dinheiro real):**
+> +2,59 USDT bruto / **−0,36 USDT líquido** de fee, win rate 34,0%. Ou seja:
+> 22 dias de operação **ainda não pagaram a corretora** — a fee acumulada (2,95)
+> é maior que todo o lucro bruto (2,59). Vale o contraste: **19/08 foi o melhor
+> dia da conta** (9 trades, +6,42 líquidos, num melt-up de +5,9% em BTC e +8,8%
+> em ETH) e sozinho tirou o acumulado de −6,5 para perto de zero — mas 6 trades
+> de 53 responderam por todo o movimento, o que confirma a concentração que a
+> pesquisa apontou como fragilidade, em vez de estabelecer edge.
+> A engenharia está sólida (zero
 > kill switch, zero posição nua, zero falha de fechamento, trailing e cooldown
 > funcionando ao vivo); **a estratégia é que ainda não tem edge** — veredito
 > reconfirmado por uma TERCEIRA rodada de pesquisa (18/08, perp long+short,
@@ -339,12 +344,13 @@ verdade sobre o que fechou; `CLAUDE.md` tem o estado exato do dia. Resumo:
   real. Ver `CLAUDE.md` ("Sessão 29-30/07/2026") pro relato completo.
   **Operação 24h migrada para o PC2 em 31/07/2026** (mesma conta mainnet —
   o PC1 nunca mais roda `--live` sem parar o PC2 antes). **22 dias contínuos
-  até 19/08/2026**: 52 trades reais, mecânica impecável (zero kill switch,
+  até 19/08/2026**: 53 trades reais, mecânica impecável (zero kill switch,
   zero posição nua, zero falha de fechamento; um único crash de console
-  religado sozinho pelo `supervisor.py`). **PnL líquido em +0,02 USDT** —
-  praticamente zero, com a fee acumulada (2,88) devorando o lucro bruto
-  (2,90). Perfil de 15m desligado em 18/08 por fricção estrutural (ver topo
-  deste README). Diagnóstico completo em `CLAUDE.md`.
+  religado sozinho pelo `supervisor.py`). **PnL líquido em −0,36 USDT** —
+  praticamente zero, com a fee acumulada (2,95) maior que todo o lucro bruto
+  (2,59). Perfil de 15m desligado em 18/08 por fricção estrutural (ver topo
+  deste README); as entradas novas do swing passaram a pagar ~8-9% de 1R em
+  fee, contra os ~27% do perfil de 15m. Diagnóstico completo em `CLAUDE.md`.
 - **Fase 6** — expansão (universo completo, ranking, infra 24/7): alerta ativo
   + restart automático feitos; fonte on-chain em tempo real (decisão #G)
   implementada; resto (universo, ranking) não iniciado. O dossiê agendado
