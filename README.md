@@ -355,10 +355,17 @@ verdade sobre o que fechou; `CLAUDE.md` tem o estado exato do dia. Resumo:
   + restart automático feitos; fonte on-chain em tempo real (decisão #G)
   implementada; resto (universo, ranking) não iniciado. O dossiê agendado
   (`dossie-cripto-pc2`) segue ligado, mas o **watchdog (`trader-watchdog-pc2`)
-  está EM STANDBY desde 18/08/2026** por decisão do Lucas — **não há mais
+  está EM STANDBY desde 18/08/2026** por decisão do Lucas — **não há
   supervisão automática fora de sessão**. Dentro de uma sessão dá para armar um
   monitor na trilha (que também precisa vigiar ausência de batimento: se o motor
   morre, a trilha só para de crescer, e um filtro que só procura erro fica mudo).
+  **A causa que levou ao standby foi resolvida em 19/08** — o bloco
+  `permissions` foi aplicado em `~/.claude/settings.json`, o arquivo GLOBAL, que
+  é o único que uma tarefa agendada enxerga. Antes disso, cada clique em
+  "permitir" gravava um comando literal com o UUID da sessão e a data embutidos
+  no `settings.local.json` do PROJETO — regra que casa uma vez e nunca mais, e
+  que fazia o dossiê rodar 1x/dia em vez das 3x configuradas. Religar o watchdog
+  agora é só `enabled: true`.
 
 Não marque uma fase como concluída aqui sem checar o critério de fechamento na
 seção 7 de `INSTRUCOES-PROJETO-v2.md` — um Roadmap desatualizado com ✅ prematuro

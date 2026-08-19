@@ -67,12 +67,19 @@ Substitui a v10, que nunca chegou a ser colada nas instruções do Claude Projec
   falha de `os.replace` em pasta com Dropbox/OneDrive.
 - **Supervisão automática fora de sessão NÃO EXISTE hoje**: o
   `trader-watchdog-pc2` está em **standby** por decisão do Lucas (18/08). O
-  `dossie-cripto-pc2` segue ligado. Causa do bug de permissão que levou ao
-  standby: as regras de allowlist vivem em `.claude/settings.local.json`, que
-  é do PROJETO, e tarefa agendada roda com outro cwd — `~/.claude/settings.json`
-  não tinha bloco `permissions`. Correção pronta em
-  `PASSO-A-PASSO-18-08-2026.md`, **só o Lucas pode aplicar** (o classificador
-  de auto mode bloqueia o agente de se auto-conceder permissão, corretamente).
+  `dossie-cripto-pc2` segue ligado. **A causa que levou ao standby foi
+  RESOLVIDA em 19/08** (bloco `permissions` aplicado em
+  `~/.claude/settings.json`), então religar o watchdog é só `enabled: true` —
+  decisão do Lucas.
+  **A causa raiz, que vale para qualquer tarefa agendada futura:** as regras de
+  allowlist vinham sendo gravadas em `.claude/settings.local.json`, que é do
+  PROJETO — e tarefa agendada roda com outro cwd, então nunca o carrega. Pior:
+  cada clique em "permitir" gravava um **comando literal com o UUID da sessão e
+  a DATA embutidos**, que casa exatamente uma vez e nunca mais. O efeito medido
+  foi o dossiê rodando 1x/dia com buracos, em vez das 3x/dia configuradas. A
+  correção é o bloco no `settings.json` GLOBAL, com padrões `**` em vez de
+  comandos literais — e **só o Lucas pode aplicá-lo** (o classificador de auto
+  mode bloqueia o agente de se auto-conceder permissão, corretamente).
 - **Lição operacional que substitui a da v10**: `supervisor.py` resolve os
   caminhos sozinho (`ROOT = Path(__file__).resolve().parent`, spawna `main.py`
   com `sys.executable` e caminho ABSOLUTO, `cwd=ROOT`) — **não precisa de
@@ -387,11 +394,17 @@ correlação; Monte Carlo; regime; decaimento; WebSocket.
 - ~~BTC/USDT perp sem conseguir entrar por causa do notional mínimo~~ —
   **RESOLVIDO na prática**: com o equity atual o nocional passou do mínimo e
   BTC voltou a operar normalmente (várias entradas reais em 18-19/08).
-- **Colar o bloco `permissions` em `~/.claude/settings.json`** (pronto em
-  `PASSO-A-PASSO-18-08-2026.md`) — sem isso, tarefa agendada pede autorização
-  a cada execução, e foi o que levou o watchdog ao standby. **Só o Lucas pode
-  fazer**: o classificador de auto mode bloqueia o agente de se auto-conceder
-  permissão, corretamente.
+- ~~Colar o bloco `permissions` em `~/.claude/settings.json`~~ — **FEITO em
+  19/08**. Ressalva: a versão aplicada ficou **mais ampla** que a proposta —
+  entraram `Read`, `Write` e `Edit` **sem escopo de caminho**, ou seja qualquer
+  sessão na máquina escreve qualquer arquivo sem perguntar. A proteção central
+  sobrevive (`deny` tem precedência: `config/`, `state/` e `logs/` do
+  `C:\BybitAutoTrader` seguem bloqueados), mas duas brechas ficam: a pasta do
+  PC1 não está no `deny`, e o próprio `settings.json` virou gravável sem
+  prompt — a trava contra auto-concessão passa a depender só do classificador.
+- **Religar o `trader-watchdog-pc2`** (`enabled: true`) agora que a causa do
+  standby foi resolvida — é a única supervisão que sobrevive ao fim da sessão.
+  Decisão do Lucas.
 - **Cirurgia pendente na trilha restaurada do PC1** (não urgente, PC1 não
   opera): uma linha de `audit_maintenance` com JSON inválido (pulada
   silenciosamente por todo leitor) e uma linha de resíduo de teste sintético.

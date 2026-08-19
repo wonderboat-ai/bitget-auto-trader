@@ -11,7 +11,57 @@ de trabalho: português do Brasil. Comentários de código explicam causa raiz.
 
 ## PRÓXIMA AÇÃO (ler antes de qualquer outra coisa)
 
-### Status verificado em 19/08/2026 ~20:00 UTC — motor 23,5h de pé, MELHOR DIA da história, acumulado ainda ~zero
+### Status verificado em 19/08/2026 ~20:30 UTC — motor PARADO de propósito, PC2 sincronizado, pendências ZERADAS
+
+**MOTOR PARADO.** `engine_stop`/`manual` auditado às **20:20:12 UTC**, a pedido
+do Lucas, para poder atualizar o PC2. Parada LIMPA via `CTRL_C_EVENT` real no
+console do supervisor (`AttachConsole` + `GenerateConsoleCtrlEvent` por ctypes) —
+**nunca usar `taskkill /F`**: sem o `engine_stop` na trilha, a parada fica
+indistinguível de crash numa auditoria futura. Zero processos restantes.
+
+**Momento da parada foi seguro**: nenhuma posição aberta, zero ordens na Bybit,
+nada exposto. Equity **188,86 USDT**. **Religar é decisão do Lucas** — nunca
+inicio `--live` por conta própria.
+
+**PC2 ATUALIZADO** para `c54bcf8` (`git pull` com o motor já parado, como manda
+a regra). Código conferido idêntico entre PC1 e PC2 por hash em
+`engine.py`/`risk_manager.py`/`risk_config.yaml`; `main.py` e `supervisor.py`
+acusam diferença de md5 mas é **só fim de linha** (CRLF × LF), zero diferença de
+conteúdo — verificado com `diff` normalizado. Estado (`cooldown_state`,
+`kill_switch_state`, `spot_protections`) preservado; `git pull` não toca neles.
+Config que o motor lerá no próximo boot: **perfis ativos = `['swing']`**, perp,
+trailing true, BTC+ETH.
+
+**AS DUAS PENDÊNCIAS DO LUCAS FORAM FECHADAS (19/08):**
+1. **`RASCUNHO-instrucoes-v11` COLADA** nas instruções do Claude Project — a
+   primeira desde a v7 (v8/v9/v10 foram criadas e nunca coladas).
+2. **Bloco `permissions` aplicado** em `~/.claude/settings.json` (17:26).
+
+**O que se aprendeu sobre o bug de permissão, e vale para qualquer tarefa
+agendada futura:** o Lucas vinha clicando "permitir" a cada execução do dossiê,
+e **cada clique virava uma regra nova no `.claude/settings.local.json` do
+PROJETO** (69 → 76 regras). Isso não podia funcionar por dois motivos
+independentes: (a) arquivo de PROJETO, e tarefa agendada roda com outro cwd, então
+nunca o carrega; (b) as regras gravadas são **comandos literais com o UUID da
+sessão e a DATA embutidos** (ex.: `...\45bac2b4-4419-.../scratchpad/gravar_contexto_2026-08-18.py`)
+— casam exatamente uma vez e nunca mais. **Evidência do custo**: o dossiê deveria
+rodar 3x/dia e os arquivos gerados mostram no máximo 1x/dia, com buracos (faltam
+07-10, 12, 13, 15 e 16 de agosto) — o padrão de "só roda quando tem alguém para
+clicar". A correção real é o bloco no `settings.json` GLOBAL, com padrões `**`
+em vez de comandos literais.
+
+**Ressalva sobre o bloco aplicado**: a versão colada ficou **mais ampla** que a
+que propus — entraram `Read`, `Write` e `Edit` **sem escopo de caminho**, ou
+seja, qualquer sessão nesta máquina escreve qualquer arquivo sem perguntar. A
+proteção central sobrevive (`deny` tem precedência: `config/`, `state/` e
+`logs/` do `C:\BybitAutoTrader` seguem bloqueados para escrita), mas duas
+brechas ficam: a pasta do PC1 não está no `deny`, e o próprio `settings.json`
+virou gravável sem prompt — a trava contra auto-concessão de permissão passa a
+depender só do classificador de auto mode.
+
+---
+
+### (histórico) Status de 19/08/2026 ~20:00 UTC — motor 23,5h de pé, MELHOR DIA da história
 
 **Motor VIVO no PC2** (`engine_start` 18/08 20:26:50 UTC, `dry_run: false`),
 23,5 h contínuas, ciclos de ~62s, kill switch livre, **zero eventos críticos e 1
@@ -51,15 +101,12 @@ trade ao vivo.
 4. **Trilha do PC1 restaurada pelo Lucas** via histórico do Dropbox (15.860
    linhas). Ver ressalva abaixo.
 
-**PENDÊNCIAS DO LUCAS (2):**
-1. **Colar o bloco `permissions` em `~/.claude/settings.json`** (conteúdo pronto
-   em `PASSO-A-PASSO-18-08-2026.md`). Tentei aplicar e **o classificador de auto
-   mode bloqueou, corretamente** — seria auto-concessão de permissão. Sem isso,
-   qualquer tarefa agendada segue pedindo autorização a cada execução.
-2. **`git pull` no PC2 na próxima parada natural do motor**, para levar a
-   documentação nova (commits `fa7c08c` em diante). Não puxei com o motor
-   rodando — o commit só tem `.md` e o risco seria nulo, mas a regra do projeto
-   é categórica e não vale abrir exceção que vira hábito.
+**PENDÊNCIAS DO LUCAS (2) — ambas FECHADAS em 19/08, ver o status no topo:**
+1. ~~Colar o bloco `permissions` em `~/.claude/settings.json`~~ — **FEITO**
+   (19/08 17:26), com escopo mais amplo que o proposto. Tentei aplicar eu mesmo
+   e **o classificador de auto mode bloqueou, corretamente** — seria
+   auto-concessão de permissão.
+2. ~~`git pull` no PC2~~ — **FEITO** (19/08, com o motor já parado).
 
 **Ressalva na trilha restaurada do PC1** (não urgente, PC1 não opera): a linha
 15860 é um `audit_maintenance` com **JSON inválido** (`Invalid \escape`, provável
@@ -3334,10 +3381,14 @@ do agente).
    `peak_price` não serve como proxy de MFE.
    **A descrição (`RASCUNHO-descricao-v2-colar-manualmente.md`) foi revisada e
    continua válida sem mudança** — descreve a arquitetura/filosofia estável do
-   sistema; nada que mudou desde então altera esse texto. **O Lucas ainda
-   precisa colar a v11 manualmente** nas instruções do Claude Project,
-   substituindo o que estiver lá (provavelmente ainda a v7, já que v8/v9/v10
-   nunca foram coladas).
+   sistema; nada que mudou desde então altera esse texto. **A v11 FOI COLADA
+   pelo Lucas em 19/08/2026** — primeira atualização das instruções do Claude
+   Project desde a v7 (22/07); v8, v9 e v10 foram criadas e nunca chegaram a ser
+   coladas. **Duas frases da v11 já nasceram desatualizadas** (as duas
+   pendências que ela lista foram fechadas horas depois de ela ser colada):
+   corrigidas no arquivo, mas o texto dentro do Claude Project só fica fiel se
+   o Lucas recolar. A diferença é pequena e o `CLAUDE.md` cobre — recolar é
+   opcional.
 6. **Engenharia (21/07): resposta à pergunta "o que fazer pra evoluir a
    engenharia do projeto?"** Duas frentes identificadas, fora da linha de
    pesquisa de estratégia: (a) ~~persistência do kill switch~~ — **FEITA e
