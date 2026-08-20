@@ -1,17 +1,96 @@
-# CLAUDE.md — Bitget Auto Trader (CLONE criado em 2026-08-20 — PORT AINDA NÃO INICIADO)
+# CLAUDE.md — Bitget Auto Trader (CLONE de 2026-08-20 — VALIDAÇÃO DA API FEITA, `bitget_client.py` AINDA NÃO ESCRITO)
 
-> ## 🔀 ESTE É UM CLONE — leia antes de qualquer outra coisa
+> ## ✅ VALIDAÇÃO AO VIVO NA BITGET CONCLUÍDA — 20/08/2026
+>
+> As operações críticas foram validadas **contra a conta real de mainnet**, com
+> dinheiro real, size mínimo. Ferramenta: **`probe_bitget.py`** (raiz), sonda em
+> fases, autônoma (não importa `src/`, não escreve na trilha). Custo total do
+> teste: **0,0059 USDT**. Todo número abaixo foi MEDIDO, não inferido.
+>
+> **O achado que redefine o port: a conta é UTA (Unified Account), e a Bitget
+> BLOQUEIA a API clássica nela** — `40085: "You are in Unified Account mode, and
+> the Classic Account API is not supported"`. O `bitget_client.py` inteiro tem
+> que falar **v3/UTA**. Não é opcional e não degrada: a rota clássica falha alto.
+>
+> **As 5 respostas que o port precisava:**
+>
+> 1. **Equity** → usar **`usdtEquity`** (de `privateUtaGetV3AccountAssets`).
+>    **`fetch_balance()['USDT']['total']` NÃO SERVE**: em UTA o ccxt descarta o
+>    bloco de equity antes do parse e mapeia `total <- asset.balance`, que é só
+>    o saldo LIVRE — sem a margem travada em posição nem o PnL não realizado.
+>    Usar isso é o **bug #3 renascido** (drawdown fantasma → kill switch falso).
+>    Medido com posição aberta: livre 286,7798 + margem 7,2617 + uPnL 0,0036 =
+>    **294,0451 = `usdtEquity`**; entre duas amostras só `usdtEquity`/
+>    `accountEquity` se moveram, e a delta bateu exatamente com a do `uPnL`.
+>    (`accountEquity` é o mesmo valor em USD, ~0,04% menor — não usar em conta
+>    denominada em USDT.)
+> 2. **Ordem com SL/TP** → funciona, e é **melhor que a Bybit**. Passar
+>    `stopLoss={'triggerPrice': X}` e `takeProfit={'triggerPrice': Y}` como
+>    **dicts** anexa as duas proteções à própria ordem de entrada. **Não** usar
+>    `stopLossPrice`/`takeProfitPrice` planos: caem em outro branch, criam
+>    ordens separadas e o ccxt recusa os dois juntos.
+> 3. **Stop e TP são UMA ordem só** (`type: "tpsl"`, um único `orderId`
+>    carregando `stopLoss` E `takeProfit`). Isso **elimina o bug #49**: não
+>    existe ordem irmã órfã na Bitget, porque não existe ordem irmã. Todo o
+>    mecanismo de cancelar a irmã (`engine.py:522`) é desnecessário no port.
+>    **Confirmado ao vivo**: com a posição zerada, as gavetas ficaram vazias — a
+>    Bitget cancela a `tpsl` sozinha.
+> 4. **Cancelamento** → em UTA o ccxt manda tudo para `CancelSymbolOrder` e
+>    **ignora `trigger`/`planType`**: é UMA chamada, não uma por categoria (ao
+>    contrário da rota clássica e da Bybit do bug #23). **Atenção**: sem nada a
+>    cancelar, ele levanta `25204 "Order does not exist"` — o client precisa
+>    tratar isso como **benigno**, senão vira ruído permanente na trilha (foi o
+>    que os 13.759 `symbol_cycle_error` da Bybit ensinaram).
+> 5. **One-way** → a conta estava em `hedge_mode` e foi trocada para
+>    **`one_way_mode`** em 20/08, confirmada por releitura. O projeto inteiro
+>    depende disso (bug #7). **A Bitget recusa a troca com posição ou ordem
+>    aberta** — só dá para fazer com a conta limpa, nunca em operação.
+>
+> **A gambiarra do one-way NÃO existe mais.** O `CLAUDE.md` anterior registrava
+> como risco o workaround `side: "buy_single"/"sell_single"` (erro 40774). Ele é
+> da **API v1 / ccxt 3.x**; desde o PR #22610 (mai/2024) o default do ccxt para
+> bitget já é one-way, sem parâmetro nenhum. Risco descartado por evidência.
+>
+> **Números reais da Bitget, medidos:**
+> - **Precisão do BTC: 0,0001** (mín. ~7 USDT) contra 0,001 da Bybit (~72 USDT).
+>   Isso **mata a causa dos 13.759 `symbol_cycle_error`** que travavam o BTC.
+> - **Fee taker 0,06%** contra 0,055% da Bybit — ~9% mais cara. Anda na direção
+>   errada num projeto onde a fee acumulada já era maior que o lucro bruto.
+>   O trade de validação ilustra: **acertou a direção** (+0,0028 bruto) e
+>   **perdeu no líquido** (−0,0059), porque a fee (0,0087) comeu 3x o ganho.
+> - Custo mínimo de ordem: 5 USDT. Equity da conta em 20/08: **294,05 USDT**.
+>
+> **Ainda NÃO validado — a última incógnita:** o **trailing stop**, que é a
+> operação de escrita mais frequente do motor (105 movimentos reais em 18 dias
+> na Bybit). O endpoint foi identificado — **`privateUtaPostV3TradeModifyStrategyOrder`**
+> — e a estrutura favorece muito: dá para alterar só o `stopLoss` do mesmo
+> `orderId` preservando o `takeProfit`, em vez do cancelar-e-recriar da Bybit.
+> **Mas isso não foi exercitado ao vivo.** É o próximo teste, e precisa de uma
+> posição real aberta.
+>
+> **`probe_bitget.py` passou por revisão adversarial** (5 lentes + verificação
+> cética; 14 de 15 achados confirmados) ANTES de tocar dinheiro. O defeito
+> central da 1ª versão vale como lição para o port inteiro: **a sonda IMPRIMIA
+> onde deveria VERIFICAR** — ausência de sinal não é sucesso. As correções que
+> sobreviveram e devem ser replicadas no client: fixar `options['uta']` no
+> `__init__` (o autodetector do ccxt engole exceção e cacheia — **bug #48
+> renascido**); nunca deixar falha de rede virar veredito; confirmar estado por
+> **releitura**, nunca pela resposta do POST.
+>
+> ---
+>
+> ## 🔀 Origem: este é um CLONE
 >
 > Esta pasta (`C:\BitgetAutoTrader`) foi criada em 20/08/2026 clonando **100% do
 > código e do histórico** do projeto original (`wonderboat-ai/bybit-auto-trader`,
 > commit `707bc10`), pra servir de base pro robô operar na **Bitget** em vez da
 > Bybit. Repositório GitHub novo: **`wonderboat-ai/bitget-auto-trader`** (privado).
 >
-> **NADA foi portado ainda.** Todo o código abaixo (`src/exchange/bybit_client.py`,
-> `config/settings.py`, os nomes de variável no `.env`, o `README.md`, este
-> `CLAUDE.md`) continua **100% Bybit** — é uma cópia fiel, não uma adaptação.
-> Isso é intencional: a ideia era clonar primeiro, portar depois, numa sessão
-> dedicada. Todo o histórico de decisões/bugs abaixo (#1 a #50) é sobre a Bybit
+> **O CÓDIGO em `src/` continua 100% Bybit** — `src/exchange/bybit_client.py`,
+> `config/settings.py`, `src/engine.py`, `src/execution/executor.py` são cópia
+> fiel, nenhuma linha adaptada. O que existe de Bitget nesta pasta hoje é
+> **só** `probe_bitget.py` (a sonda) e as variáveis `BITGET_*` no `.env`.
+> Todo o histórico de decisões/bugs abaixo (#1 a #50) é sobre a Bybit
 > e continua **historicamente correto e útil como referência** — as lições de
 > engenharia (nunca posição nua, cooldown, kill switch persistido, isolamento
 > por ambiente, etc.) se aplicam a qualquer exchange — mas os detalhes de API
@@ -21,8 +100,10 @@
 > **Diferenças reais desta pasta em relação ao projeto original:**
 > - `.venv` novo, criado do zero aqui (`pip install -r requirements.txt` já
 >   rodado — `ccxt` 4.5.74, com suporte a Bitget confirmado).
-> - `.env` é só o template (`.env.example` copiado) — **sem nenhuma chave real**.
->   Vai precisar de chaves da Bitget (não da Bybit) quando o port começar.
+> - `.env` tem as **chaves reais de MAINNET da Bitget** desde 20/08 (`BITGET_MAINNET_API_KEY`
+>   / `_SECRET` / `_PASSPHRASE`). A Bitget exige uma **passphrase** que a Bybit
+>   não tem — `ExchangeCredentials` (`config/settings.py`) vai precisar de um
+>   terceiro campo. As chaves da Bybit continuam no arquivo, vazias e inertes.
 > - `logs/`, `state/`, `data/` começam **vazios** — trilha de auditoria própria,
 >   independente da Bybit.
 > - Está **fora de qualquer pasta sincronizada** (Dropbox/OneDrive), de propósito
@@ -34,15 +115,24 @@
 > sempre primeiro) — ver a sessão de 20/08/2026 no projeto original
 > (`wonderboat-ai/bybit-auto-trader`) pro contexto completo de por que
 > (conflito de KYC/CPF na Bybit + bloqueio regulatório de derivativos pra
-> residentes BR, confirmado também na OKX).
+> residentes BR, confirmado também na OKX). **Confirmado tecnicamente em 20/08**:
+> a Bitget não tem testnet via ccxt (`urls['test']` é `None`) — não era só
+> preferência, é o único caminho.
 >
-> **Próximo passo real**: abrir uma sessão de Claude Code nesta pasta
-> (`C:\BitgetAutoTrader`) dedicada a iniciar o port — validar manualmente as 4
-> operações críticas na Bitget (saldo unificado, ordem+SL/TP, cancelamento,
-> modo one-way — este último tem gambiarra conhecida no ccxt, ver pesquisa da
-> sessão de 20/08) antes de escrever `bitget_client.py` de verdade. Como vai
-> direto pra mainnet, cada validação usa dinheiro real — size mínimo até
-> confirmar que funciona.
+> **PRÓXIMO PASSO REAL, na ordem:**
+> 1. **Validar o trailing ao vivo** (`ModifyStrategyOrder`) — última incógnita.
+>    Precisa de posição real aberta; cabe uma fase nova em `probe_bitget.py`.
+> 2. **Escrever `src/exchange/bitget_client.py`** com as respostas acima, e
+>    `ExchangeCredentials` com o campo de passphrase.
+> 3. Adaptar o que depende de detalhe de API da Bybit: `engine.py`
+>    (`_check_perp_exits`, `_handle_perp_position_closed`, `_update_perp_trailing_stop`)
+>    e `executor.py`. **Simplificações que a Bitget permite**: sem cancelar
+>    ordem irmã (não existe), sem `orderFilter`, trailing por modificação em vez
+>    de cancelar-e-recriar.
+> 4. **Antes de ligar o motor**, resolver o que a pesquisa de 18/08 deixou em
+>    aberto e que NÃO é sobre exchange: a estratégia não tem edge validado, e
+>    a fee da Bitget é PIOR que a da Bybit. Portar o robô só o faz perder
+>    dinheiro numa corretora nova — ver "Próximos passos", item 3.
 
 ---
 
