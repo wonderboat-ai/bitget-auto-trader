@@ -1,5 +1,22 @@
 # Bybit Auto Trader — Fase 1
 
+> ## ⚠️ PROJETO PAUSADO EM 20/08/2026 — migrando para a Bitget
+>
+> A conta Bybit que o robô operava caiu num conflito de identidade (KYC) — o
+> Lucas não consegue reautenticar porque a Bybit mostra outra pessoa associada
+> ao CPF dele. Pesquisa confirmou que o problema é regulatório, não específico
+> da Bybit: a CVM/Bacen está forçando toda exchange com entidade registrada no
+> Brasil (Bybit **e OKX**, confirmado) a bloquear derivativos pra residentes
+> BR, com liquidação forçada anunciada pra 21/09/2026. O saldo real (~189 USDT)
+> já foi retirado da Bybit. **O motor foi parado deliberadamente e não deve
+> ser religado nesta conta.**
+>
+> O robô está sendo **clonado** (código como está, histórico preservado) para
+> um repositório/diretório novo, para ser portado pra **Bitget** — indo direto
+> pra mainnet, por decisão do Lucas. Esta pasta fica congelada como
+> referência/histórico; nenhuma linha de código foi alterada por causa dessa
+> migração. Ver `CLAUDE.md` ("PRÓXIMA AÇÃO") para o relato completo.
+
 Sistema de trading automatizado para Bybit com **execução full-auto sob guardrails
 de risco** e supervisão humana. Arquitetura em camadas: o motor de decisão
 **propõe** sinais; a camada de risco tem **poder de veto absoluto** e calcula

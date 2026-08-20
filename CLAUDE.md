@@ -1,17 +1,86 @@
-# CLAUDE.md — Bybit Auto Trader (handoff 2026-08-19, 1º dia lucrativo, acumulado ~zero)
+# CLAUDE.md — Bybit Auto Trader (handoff 2026-08-20, projeto PAUSADO — migrando pra Bitget)
 
-Contexto vivo do projeto para agentes (Claude Code/Cowork). Fonte completa de
-regras: `INSTRUCOES-PROJETO-v2.md` v2 + `RASCUNHO-instrucoes-v11-colar-manualmente.md`
-(v11, criado 19/08 — ver "Status atual" lá; ainda NÃO colada nas instruções
-do Claude Project — substitui a v10, que nunca chegou a ser colada, mesmo
-padrão da v6→v7, v8→v9 e v9→v10). Guia operacional humano: `PASSO-A-PASSO.md`
+Contexto vivo do projeto para agentes (Claude Code/Cowork). **Este projeto está
+PAUSADO desde 20/08/2026** — ver "PRÓXIMA AÇÃO" abaixo antes de qualquer coisa;
+o robô está sendo portado pra um projeto IRMÃO (Bitget, mainnet direto), e esta
+pasta (Bybit) fica congelada como referência. Fonte completa de regras:
+`INSTRUCOES-PROJETO-v2.md` v2 + `RASCUNHO-instrucoes-v12-colar-manualmente.md`
+(v12, criado 20/08 — ver "Status atual" lá; ainda NÃO colada nas instruções
+do Claude Project — substitui a v11, colada em 19/08). Guia operacional humano: `PASSO-A-PASSO.md`
 (bootstrapping testnet — todas as etapas fechadas, ver seu próprio aviso de topo);
 `PASSO-A-PASSO-18-08-2026.md` (as 3 ações manuais do Lucas). Idioma
 de trabalho: português do Brasil. Comentários de código explicam causa raiz.
 
 ## PRÓXIMA AÇÃO (ler antes de qualquer outra coisa)
 
-### Status verificado em 19/08/2026 ~20:30 UTC — motor PARADO de propósito, PC2 sincronizado, pendências ZERADAS
+### Status verificado em 20/08/2026 ~14:00 UTC — PROJETO PAUSADO: conta Bybit em disputa de KYC, saldo já portado pra Bitget, motor parado
+
+**ESTE PROJETO (Bybit) ESTÁ PAUSADO.** Não religar o motor nesta conta sem
+decisão explícita nova do Lucas — o contexto operacional mudou de forma
+estrutural nesta sessão (20/08). Se alguém pedir pra ligar/monitorar o motor
+aqui, confirmar antes: a intenção pode ser sobre o projeto NOVO (Bitget), não
+este.
+
+**O que aconteceu, na ordem:**
+
+1. **Conflito de identidade na Bybit.** O Lucas não consegue reautenticar o
+   KYC da conta que o robô usava — a Bybit mostra outra pessoa associada ao
+   CPF dele, com e-mail diferente. Isso é indício de possível fraude de
+   identidade, fora do alcance de qualquer agente resolver: exige contato
+   direto dele com o suporte da Bybit (documento + selfie + disputa formal
+   por escrito) e, possivelmente, um Boletim de Ocorrência — alguém usando o
+   CPF dele numa exchange pode estar usando em outros lugares também.
+2. **Pesquisa confirmou que o problema é regulatório, não específico da
+   Bybit.** A CVM/Bacen está forçando toda exchange com entidade registrada
+   no Brasil a bloquear derivativos pra residentes BR — **a OKX já faz o
+   mesmo** (só spot/P2P liberado). A Bybit anunciou liquidação forçada de
+   posições incompatíveis a partir de **21/09/2026**. Binance e OKX saem de
+   cogitação como destino pelo mesmo motivo — exchanges offshore sem
+   entidade BR (Bitget, MEXC, Gate.io, KuCoin, BingX) ainda permitem
+   derivativos hoje, mas exatamente por não seguirem esse mesmo arcabouço —
+   risco aceito conscientemente pelo Lucas, não ausência de risco.
+3. **O saldo real (~189 USDT) já foi retirado da Bybit e portado pra a
+   Bitget** pelo Lucas, antes de qualquer bloqueio pior na conta.
+4. **Motor parado de forma limpa** às 13:09:52 UTC de 20/08
+   (`engine_stop`/manual) — `CTRL_C_EVENT` funcionou de primeira desta vez,
+   porque o motor rodava num terminal externo com console real (ver item 6).
+   Nenhuma posição aberta no momento.
+5. **Decisão do Lucas: portar o robô pra Bitget, indo direto pra MAINNET**
+   (sem fase de testnet antes — desvio deliberado da prática histórica do
+   projeto). Avaliação técnica feita nesta sessão (via WebSearch, não só
+   memória): Bitget é a candidata de MENOR esforço de porte entre as
+   opções offshore — tem conta unificada (UTA) parecida com a da Bybit v5, e
+   `create_order` aceita `presetStopLossPrice`/`presetTakeProfitPrice`
+   nativamente (melhor que a Bybit, que não tem OCO real entre stop e TP).
+   **Risco técnico identificado e AINDA NÃO validado na prática**: o modo
+   one-way — do qual o projeto inteiro depende (bug #7) — tem gambiarras
+   documentadas no ccxt especificamente pra Bitget (erro 40774 no
+   `create_order` padrão, precisa do workaround `side: "buy_single"/
+   "sell_single"`). Ver a conversa desta sessão (20/08) pro detalhe completo
+   da pesquisa e a tabela comparativa (Bitget vs Gate.io vs KuCoin vs MEXC
+   vs BingX).
+6. **Nada foi portado ainda.** `bybit_client.py` e tudo que depende dele
+   continuam 100% Bybit, sem nenhuma linha adaptada pra Bitget. O plano
+   combinado com o Lucas: **clonar este projeto inteiro** (código como está,
+   histórico preservado) num **diretório novo + repositório GitHub novo**,
+   com seu próprio `CLAUDE.md`/`README.md`/instruções — preservando ESTE
+   projeto intacto como referência/frozen, não alterado — e portar a partir
+   de lá, numa **sessão nova dedicada a isso**. Antes de escrever
+   `bitget_client.py` de verdade, validar manualmente as 4 operações
+   críticas (saldo, ordem+SL/TP, cancelamento, one-way) — como vai direto
+   pra mainnet, cada validação usa dinheiro real, ir com size mínimo.
+
+**Lição operacional nova desta sessão**: religar o motor num **terminal
+externo real** (`PowerShell Start-Process`, não `run_in_background` do Bash
+tool) é o que torna o `CTRL_C_EVENT` confiável pra parar depois — processos
+sem console real só param com `TaskStop`, que é kill forçado e não deixa
+`engine_stop` limpo na trilha (aconteceu 1x nesta sessão, documentado sem
+prejuízo real). Ver protocolo salvo em memória (`trader-status-command-
+protocol`) pro fluxo completo do comando "trader status".
+
+---
+
+### (histórico) Status verificado em 19/08/2026 ~20:30 UTC — motor PARADO de propósito, PC2 sincronizado, pendências ZERADAS
 
 **MOTOR PARADO.** `engine_stop`/`manual` auditado às **20:20:12 UTC**, a pedido
 do Lucas, para poder atualizar o PC2. Parada LIMPA via `CTRL_C_EVENT` real no
