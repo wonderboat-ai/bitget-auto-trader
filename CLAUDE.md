@@ -1,4 +1,50 @@
-# CLAUDE.md — Bybit Auto Trader (handoff 2026-08-20, projeto PAUSADO — migrando pra Bitget)
+# CLAUDE.md — Bitget Auto Trader (CLONE criado em 2026-08-20 — PORT AINDA NÃO INICIADO)
+
+> ## 🔀 ESTE É UM CLONE — leia antes de qualquer outra coisa
+>
+> Esta pasta (`C:\BitgetAutoTrader`) foi criada em 20/08/2026 clonando **100% do
+> código e do histórico** do projeto original (`wonderboat-ai/bybit-auto-trader`,
+> commit `707bc10`), pra servir de base pro robô operar na **Bitget** em vez da
+> Bybit. Repositório GitHub novo: **`wonderboat-ai/bitget-auto-trader`** (privado).
+>
+> **NADA foi portado ainda.** Todo o código abaixo (`src/exchange/bybit_client.py`,
+> `config/settings.py`, os nomes de variável no `.env`, o `README.md`, este
+> `CLAUDE.md`) continua **100% Bybit** — é uma cópia fiel, não uma adaptação.
+> Isso é intencional: a ideia era clonar primeiro, portar depois, numa sessão
+> dedicada. Todo o histórico de decisões/bugs abaixo (#1 a #50) é sobre a Bybit
+> e continua **historicamente correto e útil como referência** — as lições de
+> engenharia (nunca posição nua, cooldown, kill switch persistido, isolamento
+> por ambiente, etc.) se aplicam a qualquer exchange — mas os detalhes de API
+> (`orderFilter`, `tpslOrder`, `stopLossPrice`/`takeProfitPrice`, `retCode`
+> específicos da Bybit v5) NÃO se aplicam à Bitget sem adaptação.
+>
+> **Diferenças reais desta pasta em relação ao projeto original:**
+> - `.venv` novo, criado do zero aqui (`pip install -r requirements.txt` já
+>   rodado — `ccxt` 4.5.74, com suporte a Bitget confirmado).
+> - `.env` é só o template (`.env.example` copiado) — **sem nenhuma chave real**.
+>   Vai precisar de chaves da Bitget (não da Bybit) quando o port começar.
+> - `logs/`, `state/`, `data/` começam **vazios** — trilha de auditoria própria,
+>   independente da Bybit.
+> - Está **fora de qualquer pasta sincronizada** (Dropbox/OneDrive), de propósito
+>   — mesma lição do bug #50 do projeto original (sincronização quebra escrita
+>   atômica de arquivo).
+>
+> **Decisão do Lucas: ir direto para MAINNET na Bitget, sem fase de testnet.**
+> Isso é um desvio deliberado da prática histórica deste projeto (testnet
+> sempre primeiro) — ver a sessão de 20/08/2026 no projeto original
+> (`wonderboat-ai/bybit-auto-trader`) pro contexto completo de por que
+> (conflito de KYC/CPF na Bybit + bloqueio regulatório de derivativos pra
+> residentes BR, confirmado também na OKX).
+>
+> **Próximo passo real**: abrir uma sessão de Claude Code nesta pasta
+> (`C:\BitgetAutoTrader`) dedicada a iniciar o port — validar manualmente as 4
+> operações críticas na Bitget (saldo unificado, ordem+SL/TP, cancelamento,
+> modo one-way — este último tem gambiarra conhecida no ccxt, ver pesquisa da
+> sessão de 20/08) antes de escrever `bitget_client.py` de verdade. Como vai
+> direto pra mainnet, cada validação usa dinheiro real — size mínimo até
+> confirmar que funciona.
+
+---
 
 Contexto vivo do projeto para agentes (Claude Code/Cowork). **Este projeto está
 PAUSADO desde 20/08/2026** — ver "PRÓXIMA AÇÃO" abaixo antes de qualquer coisa;

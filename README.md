@@ -1,6 +1,24 @@
-# Bybit Auto Trader — Fase 1
+# Bitget Auto Trader (clone do Bybit Auto Trader — port em andamento)
 
-> ## ⚠️ PROJETO PAUSADO EM 20/08/2026 — migrando para a Bitget
+> ## 🔀 Este é um clone — código ainda 100% Bybit, port ainda não começou
+>
+> Este repositório (`wonderboat-ai/bitget-auto-trader`) foi criado em
+> 20/08/2026 clonando o `wonderboat-ai/bybit-auto-trader` inteiro (código +
+> histórico completo). O objetivo é rodar este robô na **Bitget** em vez da
+> Bybit — mas **nenhuma linha foi adaptada ainda**: tudo abaixo, incluindo o
+> resto deste README, descreve o sistema como ele é hoje (Bybit). Ver o topo
+> do `CLAUDE.md` desta pasta pro que muda e o que falta portar.
+>
+> **Motivo da migração**: a conta Bybit original caiu num conflito de KYC
+> (possível fraude de identidade — CPF do Lucas associado a outro e-mail) e,
+> à parte disso, a CVM/Bacen está forçando toda exchange com entidade
+> registrada no Brasil a bloquear derivativos pra residentes BR (Bybit e OKX
+> confirmadas) — detalhes completos no `CLAUDE.md` do repositório original.
+> **Decisão do Lucas: Bitget direto em mainnet, sem fase de testnet.**
+
+---
+
+> ## ⚠️ (histórico, do projeto original) PROJETO PAUSADO EM 20/08/2026 — migrando para a Bitget
 >
 > A conta Bybit que o robô operava caiu num conflito de identidade (KYC) — o
 > Lucas não consegue reautenticar porque a Bybit mostra outra pessoa associada
