@@ -1,85 +1,66 @@
-# Bitget Auto Trader (clone do Bybit Auto Trader — port em andamento)
+# Bitget Auto Trader
 
-> ## 🔀 Este é um clone — código ainda 100% Bybit, port ainda não começou
+> ## 🔀 Este é um clone do `bybit-auto-trader` — código já portado pra Bitget
 >
-> Este repositório (`wonderboat-ai/bitget-auto-trader`) foi criado em
-> 20/08/2026 clonando o `wonderboat-ai/bybit-auto-trader` inteiro (código +
-> histórico completo). O objetivo é rodar este robô na **Bitget** em vez da
-> Bybit — mas **nenhuma linha foi adaptada ainda**: tudo abaixo, incluindo o
-> resto deste README, descreve o sistema como ele é hoje (Bybit). Ver o topo
-> do `CLAUDE.md` desta pasta pro que muda e o que falta portar.
+> Este repositório (`wonderboat-ai/bitget-auto-trader`) nasceu em 20/08/2026
+> como clone completo do `wonderboat-ai/bybit-auto-trader` (código +
+> histórico). **O port está feito**: `src/exchange/bitget_client.py`
+> substitui o client da Bybit, `engine.py`/`executor.py` foram adaptados pro
+> modelo de proteção da Bitget, e a suíte de testes foi reescrita — 188/188
+> verde. O motor já ligou `--live` uma vez contra a conta real (20/08, ver
+> `CLAUDE.md`) e está parado no momento. Boa parte do texto abaixo (arquitetura,
+> camadas, MCP) é idêntica à do projeto original por design — a mudança real
+> foi só em COMO o sistema fala com a exchange, não na filosofia de risco.
 >
 > **Motivo da migração**: a conta Bybit original caiu num conflito de KYC
 > (possível fraude de identidade — CPF do Lucas associado a outro e-mail) e,
 > à parte disso, a CVM/Bacen está forçando toda exchange com entidade
 > registrada no Brasil a bloquear derivativos pra residentes BR (Bybit e OKX
-> confirmadas) — detalhes completos no `CLAUDE.md` do repositório original.
-> **Decisão do Lucas: Bitget direto em mainnet, sem fase de testnet.**
+> confirmadas). **Decisão do Lucas: Bitget direto em mainnet, sem fase de
+> testnet** — confirmado tecnicamente que a Bitget não tem testnet via ccxt
+> (`urls['test']` é `None`), então não era só preferência.
+>
+> **Diferenças reais de arquitetura em relação à Bybit** (detalhe completo
+> no `CLAUDE.md`):
+> - A conta é **UTA** (Unified Account) — a API clássica da Bitget é
+>   bloqueada nela; todo o client fala v3/UTA.
+> - **Stop e take-profit são UMA ordem só** (`tpsl`, um `orderId` com os dois
+>   gatilhos), criada anexada à própria entrada — elimina de vez a classe de
+>   bug "ordem irmã órfã" que existia na Bybit.
+> - **Trailing é atômico** (`move_stop_loss`, uma chamada) em vez de
+>   cancelar+recriar — sem a janela sem proteção que a Bybit exigia.
+> - A Bitget **não tem testnet via ccxt** — este projeto opera direto em
+>   mainnet, com dinheiro real desde a primeira ordem.
 
 ---
 
-> ## ⚠️ (histórico, do projeto original) PROJETO PAUSADO EM 20/08/2026 — migrando para a Bitget
->
-> A conta Bybit que o robô operava caiu num conflito de identidade (KYC) — o
-> Lucas não consegue reautenticar porque a Bybit mostra outra pessoa associada
-> ao CPF dele. Pesquisa confirmou que o problema é regulatório, não específico
-> da Bybit: a CVM/Bacen está forçando toda exchange com entidade registrada no
-> Brasil (Bybit **e OKX**, confirmado) a bloquear derivativos pra residentes
-> BR, com liquidação forçada anunciada pra 21/09/2026. O saldo real (~189 USDT)
-> já foi retirado da Bybit. **O motor foi parado deliberadamente e não deve
-> ser religado nesta conta.**
->
-> O robô está sendo **clonado** (código como está, histórico preservado) para
-> um repositório/diretório novo, para ser portado pra **Bitget** — indo direto
-> pra mainnet, por decisão do Lucas. Esta pasta fica congelada como
-> referência/histórico; nenhuma linha de código foi alterada por causa dessa
-> migração. Ver `CLAUDE.md` ("PRÓXIMA AÇÃO") para o relato completo.
-
-Sistema de trading automatizado para Bybit com **execução full-auto sob guardrails
+Sistema de trading automatizado com **execução full-auto sob guardrails
 de risco** e supervisão humana. Arquitetura em camadas: o motor de decisão
 **propõe** sinais; a camada de risco tem **poder de veto absoluto** e calcula
 o sizing; o executor só envia ordens já aprovadas.
 
-> **Fase atual:** estratégia determinística (sem LLM) + mainnet. Mercado religado
-> para PERP (`market.type: "perp"` em `config/risk_config.yaml`, 28/07/2026) — o
-> bloqueio de compliance da Bybit para derivativos em conta BR (visto em 15/07)
-> não se repetiu; long e short confirmados ao vivo, ponta a ponta (entrada,
-> trailing real, fechamento auditado, cooldown por símbolo), com dinheiro real.
-> Teto de alavancagem 2x, teto de capital 50% do equity por trade (decisões do
-> Lucas). O Claude entra na geração de sinal só na Fase 3, usando o mesmo
-> contrato `Signal`.
+> **Fase atual:** estratégia determinística (sem LLM), perp, mainnet — a
+> MESMA configuração de risco usada por último na Bybit (`config/risk_config.yaml`
+> não foi alterada no port): `market.type: "perp"`, alavancagem 2x, teto de
+> capital 50% do equity por trade, cooldown 30/60/1440min, só o perfil
+> `swing` (4h) ativo — o perfil de 15m (`daytrade`) segue desligado pela
+> mesma razão estrutural encontrada na Bybit (fee/R alto demais em stops
+> apertados). O Claude entra na geração de sinal só na Fase 3.
 >
-> **Onde o motor roda (18/08/2026):** SOMENTE no **PC2** (`C:\BybitAutoTrader`),
-> mainnet, `--live`, 24h. A pasta sincronizada (PC1) é **só dev/documentação** —
-> as duas máquinas usam a MESMA conta mainnet, então rodar `--live` nas duas ao
-> mesmo tempo é proibido por segurança. A trilha de auditoria que vale é a do
-> PC2 (`C:\BybitAutoTrader\logs\audit.jsonl`); a do PC1 está congelada desde
-> 31/07/2026. O `.mcp.json` do PC1 está **em standby** (aponta pra um caminho
-> antigo que não existe mais) — o servidor MCP vivo é o do PC2.
+> **Motor ligado uma vez ao vivo em 20/08/2026** (~16min, mainnet, zero
+> trades — perfil de 4h não gerou sinal na janela), parado limpo a pedido do
+> Lucas. Ver `CLAUDE.md` pro estado exato agora. Comando "trader status"
+> (skill em `.claude/skills/trader-status/`) sempre responde o status atual
+> e nunca liga o motor sozinho — só entrega o comando pro Lucas rodar.
 >
-> **Perfil de 15 minutos DESLIGADO em 18/08/2026**
-> (`trading.profiles.daytrade.enabled: false`). Só o perfil `swing` (4h) opera.
-> Causa: com o teto de nocional de 50% do equity mordendo em 90% dos sinais
-> reais, o nocional fica constante e a fee vira fração fixa dele, enquanto 1R
-> encolhe com a distância do stop — a identidade é `fee/R = 0,11% ÷ stop%`. Em
-> 15m o stop mediano é 0,40% do preço, então a fee comia **~27% de cada 1R**;
-> em 4h são ~7-9%. Medido em BTC+ETH nos últimos 12 meses, o perfil de 15m dava
-> mediana −97,20%. **Espere bem menos operações — é o desenho, não falha.**
->
-> **Resultado real até aqui (28/07 → 19/08, 53 trades com dinheiro real):**
-> +2,59 USDT bruto / **−0,36 USDT líquido** de fee, win rate 34,0%. Ou seja:
-> 22 dias de operação **ainda não pagaram a corretora** — a fee acumulada (2,95)
-> é maior que todo o lucro bruto (2,59). Vale o contraste: **19/08 foi o melhor
-> dia da conta** (9 trades, +6,42 líquidos, num melt-up de +5,9% em BTC e +8,8%
-> em ETH) e sozinho tirou o acumulado de −6,5 para perto de zero — mas 6 trades
-> de 53 responderam por todo o movimento, o que confirma a concentração que a
-> pesquisa apontou como fragilidade, em vez de estabelecer edge.
-> A engenharia está sólida (zero
-> kill switch, zero posição nua, zero falha de fechamento, trailing e cooldown
-> funcionando ao vivo); **a estratégia é que ainda não tem edge** — veredito
-> reconfirmado por uma TERCEIRA rodada de pesquisa (18/08, perp long+short,
-> painel adversarial de 9 agentes, decisão unânime de não promover). Ver
-> `research/RELATORIO-2026-08-18-pesquisa-3-perp.md`.
+> **Resultado da MESMA estratégia na Bybit (22 dias, 53 trades reais,
+> 28/07→19/08):** +2,59 USDT bruto / **−0,36 USDT líquido** de fee, win rate
+> 34,0% — a fee acumulada (2,95) foi maior que todo o lucro bruto. Um painel
+> adversarial de 9 agentes (18/08) confirmou, numa TERCEIRA rodada de
+> pesquisa, que esta família de estratégia não tem edge validado. Migrar de
+> exchange resolve o bloqueio de KYC da Bybit; **não resolve isso** — e a fee
+> da Bitget é ligeiramente maior (0,06% vs 0,055%). Decisão consciente do
+> Lucas: seguir com a mesma estratégia mesmo assim.
 >
 > **Este README é referência de arquitetura/instalação, não status do dia.** Para
 > o estado exato agora (o que rodou, o que travou, decisões em aberto), leia
@@ -95,7 +76,7 @@ dados de mercado ─▶ snapshot ─▶ ESTRATÉGIA (propõe Signal)
                               (veto absoluto + sizing pelo stop + kill switch)
                                       │  aprovado?
                                       ▼
-                                  EXECUTOR ─▶ Bybit (testnet/mainnet)
+                                  EXECUTOR ─▶ Bitget (mainnet — sem testnet)
                                       │
                                       ▼
                               audit.jsonl (trilha de toda decisão)
@@ -110,12 +91,12 @@ valida contra limites hard-coded e **descarta** o que violar — sem negociar.
 Projeto Auto-trader/
 ├── main.py                     # ponto de entrada (--once / --live / --interval)
 ├── config/
-│   ├── settings.py             # ambiente + credenciais (testnet/mainnet separados)
+│   ├── settings.py             # get_bitget_credentials() — recusa qualquer ENVIRONMENT != mainnet
 │   └── risk_config.yaml        # LIMITES DE RISCO — o coração do sistema
 ├── src/
-│   ├── exchange/bybit_client.py   # wrapper CCXT (só fala com a exchange)
+│   ├── exchange/bitget_client.py  # wrapper CCXT (só fala com a exchange; UTA, tpsl única)
 │   ├── data/market_data.py        # snapshot + indicadores (EMA/RSI/ATR)
-│   ├── context/providers.py       # macro/on-chain/derivativos (dossiê 3x/dia + Bybit direto, decisão #G — inertes até a Fase 3 ligar)
+│   ├── context/providers.py       # macro/on-chain/derivativos (dossiê 3x/dia + Bitget direto, decisão #G — inertes até a Fase 3 ligar)
 │   ├── strategy/signal.py         # contrato Signal (fronteira decisão↔risco)
 │   ├── strategy/deterministic.py  # estratégia Fase 1 (sem LLM; trailing stop + take-profit fixo convivem em produção)
 │   ├── strategy/llm_strategy.py   # camada Claude (Fase 3, pronta/endurecida e desligada)
@@ -143,23 +124,28 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-## Gerar chaves da TESTNET da Bybit (sem dinheiro real)
+## Gerar chaves da Bitget (MAINNET — a Bitget não tem testnet via ccxt)
 
-1. Acesse **https://testnet.bybit.com** e crie/entre numa conta de testnet
-   (é separada da conta real; o login é independente).
-2. No menu do perfil → **API** → **Create New Key**.
-3. Escolha **System-generated API Keys**.
-4. Permissões: marque **Contract / Trade** (e *Read*). **NÃO** habilite saque/withdraw.
-5. Em *IP restriction*, restrinja ao seu IP se possível (boa prática).
-6. Copie a **API Key** e o **API Secret** (o secret só aparece uma vez).
-7. Cole no `.env`:
+> ⚠️ **Não existe modo de teste aqui.** `ccxt.bitget().urls['test']` é `None` —
+> qualquer chave gerada abaixo, usada com `--live`, move dinheiro real desde a
+> primeira ordem. Use size mínimo até confiar no fluxo.
+
+1. Acesse **bitget.com** → perfil → **API Management** → **Create API Key**.
+2. Permissões: marque **leitura + trade de contratos (Futures)**. **NUNCA**
+   habilite saque/withdraw.
+3. A Bitget pede uma **passphrase** que você escolhe na hora — ela **não é
+   recuperável depois** se perdida; anote junto com key/secret.
+4. Restrinja por IP se possível.
+5. Cole no `.env`:
    ```
-   ENVIRONMENT=testnet
-   BYBIT_TESTNET_API_KEY=sua_key
-   BYBIT_TESTNET_API_SECRET=seu_secret
+   ENVIRONMENT=mainnet
+   BITGET_MAINNET_API_KEY=sua_key
+   BITGET_MAINNET_API_SECRET=seu_secret
+   BITGET_MAINNET_API_PASSPHRASE=sua_passphrase
    ```
-8. Pegue saldo fictício na testnet: na interface, **Assets → Request a Coupon** /
-   faucet de USDT de teste, para ter banca para o paper trading.
+6. Confirme a leitura antes de qualquer ordem: `python diag_saldo.py` — mostra
+   o equity real (`usdtEquity`) e explica por que não é o mesmo campo que
+   `fetch_balance()` do ccxt devolveria.
 
 ## Rodar
 
@@ -170,15 +156,16 @@ python main.py --once
 # loop contínuo em DRY_RUN (paper trading), ciclo a cada 60s
 python main.py
 
-# executar ordens DE VERDADE na exchange configurada (testnet, enquanto ENVIRONMENT=testnet)
+# executar ordens DE VERDADE na Bitget (dinheiro real, sempre — não há testnet)
 python main.py --live
 
 # recomendado p/ produção: mesma coisa, mas religa sozinho se o processo cair por crash
 python supervisor.py --live
 ```
 
-`--live` com `ENVIRONMENT=testnet` envia ordens reais **na testnet** (dinheiro fictício).
-Só passe para mainnet de forma deliberada — ver abaixo.
+`get_bitget_credentials()` recusa qualquer `ENVIRONMENT` diferente de
+`mainnet` com erro explícito — de propósito, pra nunca degradar em silêncio
+pra um modo que não existe.
 
 `supervisor.py` (novo) spawna `main.py` como subprocesso e o religa automaticamente
 em caso de crash (nunca em parada manual — Ctrl+C encerra os dois juntos), com
@@ -200,10 +187,10 @@ padrão de rodar em produção; `main.py` direto continua válido pra teste manu
 | `drawdown.max_total_drawdown_pct` | 15% | parada total |
 | `circuit_breakers.*` | — | funding anômalo, feed defasado, slippage |
 
-Observação: `circuit_breakers.max_abs_funding_rate_testnet` (0.01) vale SÓ com
-`ENVIRONMENT=testnet` — na testnet o funding vive no clamp da exchange (±0.005)
-por book raso, o que vetaria toda entrada da Fase 1. A mainnet usa o limiar
-estrito `max_abs_funding_rate` (0.003).
+Observação: `circuit_breakers.max_abs_funding_rate_testnet` (0.01) é herança da
+época da Bybit (que tinha testnet) — hoje inalcançável na prática, já que
+`get_bitget_credentials()` recusa qualquer `ENVIRONMENT` diferente de
+`mainnet`. A mainnet usa o limiar estrito `max_abs_funding_rate` (0.003).
 
 O **kill switch** só é resetado **manualmente** (`RiskManager.reset_kill_switch()`),
 nunca de forma automática. Mudar qualquer limite é ação manual e deliberada.
@@ -212,8 +199,10 @@ nunca de forma automática. Mudar qualquer limite é ação manual e deliberada.
 
 Valida a estratégia em dados históricos **antes** de qualquer execução ao vivo.
 Reutiliza o MESMO `RiskManager` e o MESMO contrato `Signal` do live — se divergissem,
-o backtest mentiria. Os dados vêm do endpoint **público** da Bybit (não precisa de chave)
-e ficam em cache em `data/`.
+o backtest mentiria. Os dados históricos vêm do endpoint **público** da Bybit
+(`src/backtest/data_loader.py` — não precisa de chave; este utilitário de
+pesquisa **não foi portado** pra Bitget nesta sessão, é um gap conhecido,
+separado do client de trading real) e ficam em cache em `data/`.
 
 ```bash
 # baixa ~1500 candles de 15m e roda o backtest
@@ -386,21 +375,22 @@ verdade sobre o que fechou; `CLAUDE.md` tem o estado exato do dia. Resumo:
   (2,59). Perfil de 15m desligado em 18/08 por fricção estrutural (ver topo
   deste README); as entradas novas do swing passaram a pagar ~8-9% de 1R em
   fee, contra os ~27% do perfil de 15m. Diagnóstico completo em `CLAUDE.md`.
-- **Fase 6** — expansão (universo completo, ranking, infra 24/7): alerta ativo
-  + restart automático feitos; fonte on-chain em tempo real (decisão #G)
-  implementada; resto (universo, ranking) não iniciado. O dossiê agendado
-  (`dossie-cripto-pc2`) segue ligado, mas o **watchdog (`trader-watchdog-pc2`)
-  está EM STANDBY desde 18/08/2026** por decisão do Lucas — **não há
-  supervisão automática fora de sessão**. Dentro de uma sessão dá para armar um
-  monitor na trilha (que também precisa vigiar ausência de batimento: se o motor
-  morre, a trilha só para de crescer, e um filtro que só procura erro fica mudo).
-  **A causa que levou ao standby foi resolvida em 19/08** — o bloco
-  `permissions` foi aplicado em `~/.claude/settings.json`, o arquivo GLOBAL, que
-  é o único que uma tarefa agendada enxerga. Antes disso, cada clique em
-  "permitir" gravava um comando literal com o UUID da sessão e a data embutidos
-  no `settings.local.json` do PROJETO — regra que casa uma vez e nunca mais, e
-  que fazia o dossiê rodar 1x/dia em vez das 3x configuradas. Religar o watchdog
-  agora é só `enabled: true`.
+  **(o bloco acima é histórico da Bybit — a operação parou ali por KYC, não
+  por decisão de estratégia.)**
+- **Fase 5, continuação na Bitget (20/08/2026)** — port do código concluído
+  (`bitget_client.py` + `engine.py`/`executor.py` adaptados, suíte 188/188
+  verde), **mesma configuração de risco/estratégia da Bybit**, sem alteração.
+  Primeiro `--live` real rodou ~16min no mesmo dia, zero trades (perfil
+  swing/4h não gerou sinal na janela), parado limpo a pedido do Lucas — zero
+  eventos críticos. Skill `.claude/skills/trader-status/` cobre a checagem de
+  rotina (nunca liga o motor sozinha). Ver `CLAUDE.md` pro estado exato agora.
+- **Fase 6** — expansão (universo completo, ranking, infra 24/7): o que está
+  descrito abaixo é histórico da operação na Bybit (PC2, watchdog agendado,
+  dossiê) e **ainda não foi replicado nesta pasta** — hoje a supervisão é só
+  a de sessão (Monitor + checagem periódica), sem tarefa agendada fora de
+  sessão nem segunda máquina. Fonte on-chain em tempo real (decisão #G) foi
+  portada e segue implementada. Resto (universo, ranking, watchdog 24/7 pra
+  Bitget) não iniciado — reavaliar se/quando o volume de operação justificar.
 
 Não marque uma fase como concluída aqui sem checar o critério de fechamento na
 seção 7 de `INSTRUCOES-PROJETO-v2.md` — um Roadmap desatualizado com ✅ prematuro
@@ -409,6 +399,7 @@ foi exatamente o tipo de confusão que gerou a v2 das instruções do projeto.
 ## Avisos
 
 - O sistema **não** executa saques nem move fundos — só abre/fecha posições.
-- Mainnet = dinheiro real. Confirme a situação regulatória da Bybit para residentes
-  no Brasil antes de operar com capital real.
+- Mainnet = dinheiro real, sempre — a Bitget não tem modo de teste via ccxt.
+  Confirme a situação regulatória pra residentes no Brasil antes de operar
+  com capital real (motivo original da migração da Bybit).
 - Mantenha o kill switch manual acessível. "Full-auto" não significa "sem operador".

@@ -1,6 +1,45 @@
-# CLAUDE.md — Bitget Auto Trader (CLONE de 2026-08-20 — CÓDIGO PORTADO, SUÍTE VERDE, ESTRATÉGIA AINDA EM ABERTO)
+# CLAUDE.md — Bitget Auto Trader (CLONE de 2026-08-20 — MOTOR JÁ LIGOU AO VIVO, PARADO NO MOMENTO, ESTRATÉGIA EM ABERTO)
 
-> ## ✅ CÓDIGO PORTADO E SUÍTE VERDE — 20/08/2026 (commit `49861ba`)
+> ## ✅ PRIMEIRO BOOT `--live` NA BITGET — 20/08/2026 (commits `49861ba`..`6c7fede`)
+>
+> Depois do código portado (bloco abaixo), o Lucas ligou o motor de verdade:
+> `python supervisor.py --live`, rodado por ele mesmo num terminal externo
+> (decisão do agente: nunca inicio `--live` sozinho, é ação financeira — só
+> confirmo depois e dou o comando exato). Ciclo de ~62s, ambiente `mainnet`,
+> `dry_run: false`.
+>
+> **Rodou ~16min (21:50:01 → 22:06:09 UTC) e foi parado, a pedido do Lucas.**
+> Estado no momento da parada: **zero posições abertas, zero trades
+> executados** (perfil swing/4h não gerou sinal na janela) — nenhuma
+> exposição real chegou a existir. Parada **limpa**: `CTRL_C_EVENT` real via
+> ctypes (`AttachConsole`+`GenerateConsoleCtrlEvent`, mesma técnica de sempre
+> deste projeto — nunca `taskkill /F`), `engine_stop`/`reason: "manual"`
+> auditado, supervisor não tentou religar (reconhece parada deliberada).
+> Confirmado por um `Monitor` armado na trilha, que pegou o `engine_stop` em
+> tempo real. **Zero eventos críticos durante toda a janela.**
+>
+> **Nova habilidade criada: `.claude/skills/trader-status/SKILL.md`.**
+> Sempre que o Lucas disser só "trader status", o fluxo é: checar se o motor
+> está rodando (árvore de processos, não só a trilha) → se desligado, avisar
+> e entregar o comando exato pra ele ligar (**nunca ligo sozinho, mesmo
+> dentro de uma skill automatizada** — é a mesma regra de sempre, e o motivo
+> de ser skill não muda isso: uma sessão futura sem ninguém olhando não pode
+> decidir ligar `--live` por conta própria) → se ligado, reportar status
+> completo (equity/posições/kill switch/cooldown/resumo de PnL histórico) e
+> armar um `Monitor` persistente na trilha filtrando entradas/saídas/PnL/
+> trailing/erros, **mais** um `ScheduleWakeup` de ~20-30min como backstop de
+> ausência de batimento (um monitor por palavra-chave fica mudo se o motor
+> morrer sem gerar nenhuma linha — a mesma lição que este projeto já pagou
+> caro no histórico da Bybit).
+>
+> **Estado agora**: motor **PARADO**, kill switch livre, zero posições, zero
+> trades na trilha desta exchange ainda. Religar é decisão do Lucas — pode
+> ser via `trader status` (que dá o comando, não liga sozinho) ou pedido
+> direto.
+>
+> ---
+>
+> ## (histórico) Código portado e suíte verde — 20/08/2026 (commit `49861ba`)
 >
 > `src/exchange/bitget_client.py` está escrito e validado com dinheiro real.
 > `src/engine.py`/`src/execution/executor.py` adaptados pro modelo da Bitget
