@@ -1,6 +1,58 @@
-# CLAUDE.md — Bitget Auto Trader (CLONE de 2026-08-20 — VALIDAÇÃO DA API FEITA, `bitget_client.py` AINDA NÃO ESCRITO)
+# CLAUDE.md — Bitget Auto Trader (CLONE de 2026-08-20 — CÓDIGO PORTADO, SUÍTE VERDE, ESTRATÉGIA AINDA EM ABERTO)
 
-> ## ✅ VALIDAÇÃO AO VIVO NA BITGET CONCLUÍDA — 20/08/2026
+> ## ✅ CÓDIGO PORTADO E SUÍTE VERDE — 20/08/2026 (commit `49861ba`)
+>
+> `src/exchange/bitget_client.py` está escrito e validado com dinheiro real.
+> `src/engine.py`/`src/execution/executor.py` adaptados pro modelo da Bitget
+> (proteção anexada na entrada, tpsl única, trailing atômico via
+> `move_stop_loss`). A suíte de testes foi reescrita do zero — **188/188
+> verde** (180 `test_smoke.py` + 8 `test_ciclo.py`). Motor roda ponta a ponta
+> em dry-run contra a conta real (`python main.py --once`).
+>
+> **O que mudou de estrutura, em relação ao plano original:**
+> - `set_stop_loss`/`set_take_profit`/`fetch_open_stop_orders` foram
+>   REMOVIDOS do client (não da Bybit — não fazem sentido na Bitget: não há
+>   caminho no ccxt pra criar uma tpsl de duas pernas fora da entrada).
+>   Substituídos por `fetch_position_tpsl`/`move_stop_loss`/`move_take_profit`.
+> - `_handle_perp_position_closed` perdeu o laço de dois ids (stop_id/tp_id)
+>   — com uma tpsl só, aquele laço casaria SEMPRE no slot do stop e rotularia
+>   até trades VENCEDORES como `stop_loss`, acionando cooldown depois de
+>   acertar. O motivo agora é derivado por proximidade de preço;
+>   `fetch_last_close_fill` é a 2ª fonte quando a exchange já cancelou a tpsl
+>   sozinha (o comportamento medido ao vivo em 20/08).
+> - O bloco de cancelar a ordem irmã órfã foi REMOVIDO do engine (não
+>   deixado inerte) — não existe ordem irmã na Bitget.
+> - `Engine.__init__` recusa `market.type: "spot"` com `RuntimeError` — o
+>   caminho spot não foi portado (stubs em `bitget_client.py` levantam
+>   `NotImplementedError`).
+> - **~60% da suíte antiga (caminho spot) foi DELETADA, não adaptada** — ela
+>   testava código agora inalcançável por construção. As seções de
+>   fechamento/trailing perp foram reescritas do zero. Uma lacuna de
+>   cobertura ficou documentada em vez de fingida: a prova de ponta a ponta
+>   TP-fixo+trailing no backtester dependia de uma seção spot deletada e não
+>   foi reconstruída (reproduzir de memória arriscava mascarar bug em vez de
+>   provar comportamento).
+>
+> **Bugs achados e corrigidos NESTA sessão** (nenhum estava na auditoria
+> anterior — apareceram escrevendo o client/testes e validando ao vivo):
+> `average`/`price` vinham como a STRING `"0"` em UTA (truthy em Python,
+> quebraria com `TypeError` em toda entrada real — mesma classe do
+> `NameError` de uma variável renomeada que também escapou pra produção antes
+> de eu testar); `fetch_balance_usdt` aceitava `"0"` como equity válido e o
+> fallback antigo (`assets[].equity`) media outra grandeza que `usdtEquity`;
+> notional de posição degradava sempre pra `0.0` (resgate por `markPrice` era
+> código morto); `create_order` sem validação das pernas de proteção;
+> `opened_ts` nunca chegava a `fetch_last_close_fill`; leitura de equity sem
+> try bloqueava a reconciliação de fechamento e o trailing de uma posição já
+> aberta. Todos corrigidos e cobertos por teste ou validados ao vivo com
+> dinheiro mínimo.
+>
+> **PRÓXIMO PASSO REAL**: não é mais sobre código. Falta decidir a estratégia
+> — ver item 4 de "Próximos passos" logo abaixo, que continua de pé.
+>
+> ---
+>
+> ## (histórico) Validação ao vivo da API — 20/08/2026
 >
 > As operações críticas foram validadas **contra a conta real de mainnet**, com
 > dinheiro real, size mínimo. Ferramenta: **`probe_bitget.py`** (raiz), sonda em
@@ -139,21 +191,11 @@
 > a Bitget não tem testnet via ccxt (`urls['test']` é `None`) — não era só
 > preferência, é o único caminho.
 >
-> **PRÓXIMO PASSO REAL, na ordem** (a validação da API está COMPLETA — as 6
-> perguntas foram respondidas ao vivo; o que falta é código):
-> 1. **`src/exchange/bitget_client.py`** com as respostas acima, e
->    `ExchangeCredentials` (`config/settings.py`) ganhando o campo de
->    **passphrase**. Replicar do `probe_bitget.py`: fixar `options['uta']` no
->    `__init__`, tratar `25204` como benigno, confirmar estado por releitura.
-> 2. Adaptar o que depende de detalhe de API da Bybit: `engine.py`
->    (`_check_perp_exits`, `_handle_perp_position_closed`,
->    `_update_perp_trailing_stop`) e `executor.py`. **A Bitget SIMPLIFICA**:
->    sem cancelar ordem irmã (não existe irmã), sem `orderFilter`, trailing por
->    modificação atômica em vez de cancelar-e-recriar — cai junto a janela sem
->    proteção e a cura de arquivo stale.
-> 3. **A suíte (307 testes) é 100% escrita contra a Bybit.** Os fakes de
->    exchange imitam respostas da Bybit v5; boa parte precisa de fake novo.
->    Não ligar o motor antes de a suíte voltar verde.
+> **PRÓXIMO PASSO REAL, na ordem** (histórico — itens 1-3 CONCLUÍDOS em
+> 20/08, commit `49861ba`; ver o bloco no topo do arquivo pro estado atual):
+> 1. ~~`src/exchange/bitget_client.py`~~ — **FEITO**.
+> 2. ~~Adaptar `engine.py`/`executor.py`~~ — **FEITO**.
+> 3. ~~Suíte verde~~ — **FEITO** (188/188).
 > 4. **Antes de ligar o motor, decidir a estratégia — isto NÃO é sobre a
 >    exchange.** Trocar de corretora resolve o bloqueio de KYC; não resolve que
 >    a estratégia não tem edge validado (painel unânime de 18/08) e que 22 dias
