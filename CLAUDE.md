@@ -4,8 +4,14 @@
 >
 > As operações críticas foram validadas **contra a conta real de mainnet**, com
 > dinheiro real, size mínimo. Ferramenta: **`probe_bitget.py`** (raiz), sonda em
-> fases, autônoma (não importa `src/`, não escreve na trilha). Custo total do
-> teste: **0,0059 USDT**. Todo número abaixo foi MEDIDO, não inferido.
+> fases, autônoma (não importa `src/`, não escreve na trilha). Custo total dos
+> **2 ciclos de teste: 0,0159 USDT**. Todo número abaixo foi MEDIDO, não inferido.
+>
+> **DECISÃO DO LUCAS (20/08): a Bitget passa a ser a exchange OPERACIONAL, até
+> ele regularizar o KYC da Bybit.** Isso reclassifica o port de "infraestrutura
+> pronta para quando for útil" para **caminho crítico** — não é mais um
+> exercício paralelo. A pasta da Bybit (`C:\BybitAutoTrader` no PC2) continua
+> parada e congelada como referência.
 >
 > **O achado que redefine o port: a conta é UTA (Unified Account), e a Bitget
 > BLOQUEIA a API clássica nela** — `40085: "You are in Unified Account mode, and
@@ -60,13 +66,27 @@
 >   **perdeu no líquido** (−0,0059), porque a fee (0,0087) comeu 3x o ganho.
 > - Custo mínimo de ordem: 5 USDT. Equity da conta em 20/08: **294,05 USDT**.
 >
-> **Ainda NÃO validado — a última incógnita:** o **trailing stop**, que é a
-> operação de escrita mais frequente do motor (105 movimentos reais em 18 dias
-> na Bybit). O endpoint foi identificado — **`privateUtaPostV3TradeModifyStrategyOrder`**
-> — e a estrutura favorece muito: dá para alterar só o `stopLoss` do mesmo
-> `orderId` preservando o `takeProfit`, em vez do cancelar-e-recriar da Bybit.
-> **Mas isso não foi exercitado ao vivo.** É o próximo teste, e precisa de uma
-> posição real aberta.
+> 6. **Trailing** → **VALIDADO AO VIVO** e é a maior simplificação do port.
+>    `ex.edit_order(tpsl_id, symbol, "market", side, None, None,
+>    {"stopLossPrice": novo})` roteia para `ModifyStrategyOrder` e move o stop
+>    **numa única chamada**. Medido em 2 movimentos consecutivos numa posição
+>    real: o stop foi para onde foi pedido, **o `takeProfit` foi preservado
+>    intacto** e o **`orderId` NÃO mudou** (o client pode guardar o `tpsl_id`
+>    uma vez e reusar).
+>    Por que isso importa tanto: na Bybit mover o stop era cancelar + recriar +
+>    re-armar o antigo se a criação falhasse + gritar se o re-arm falhasse, com
+>    uma **janela real sem proteção** no meio e mais a "cura de arquivo stale"
+>    (conferir o gatilho real na exchange antes de mover, porque o registro
+>    local podia divergir). Na Bitget **nada disso é necessário**: é atômico e
+>    não há janela desprotegida. `_update_perp_trailing_stop` encolhe para uma
+>    fração do que é hoje.
+>    **Armadilha a não esquecer**: aqui o parâmetro é `stopLossPrice` PLANO —
+>    ao contrário do `create_order`, que exige os dicts `stopLoss`/`takeProfit`.
+>    E o ccxt **recusa `stopLossPrice` e `takeProfitPrice` juntos** no edit
+>    (bitget.py:5641), então o request sai só com o stop. Era exatamente o risco
+>    que o teste existia para medir — se a Bitget tratasse campo ausente como
+>    "limpar", o motor apagaria o alvo a cada movimento, em silêncio. Ela trata
+>    como "manter". **Medido, não suposto.**
 >
 > **`probe_bitget.py` passou por revisão adversarial** (5 lentes + verificação
 > cética; 14 de 15 achados confirmados) ANTES de tocar dinheiro. O defeito
@@ -119,20 +139,28 @@
 > a Bitget não tem testnet via ccxt (`urls['test']` é `None`) — não era só
 > preferência, é o único caminho.
 >
-> **PRÓXIMO PASSO REAL, na ordem:**
-> 1. **Validar o trailing ao vivo** (`ModifyStrategyOrder`) — última incógnita.
->    Precisa de posição real aberta; cabe uma fase nova em `probe_bitget.py`.
-> 2. **Escrever `src/exchange/bitget_client.py`** com as respostas acima, e
->    `ExchangeCredentials` com o campo de passphrase.
-> 3. Adaptar o que depende de detalhe de API da Bybit: `engine.py`
->    (`_check_perp_exits`, `_handle_perp_position_closed`, `_update_perp_trailing_stop`)
->    e `executor.py`. **Simplificações que a Bitget permite**: sem cancelar
->    ordem irmã (não existe), sem `orderFilter`, trailing por modificação em vez
->    de cancelar-e-recriar.
-> 4. **Antes de ligar o motor**, resolver o que a pesquisa de 18/08 deixou em
->    aberto e que NÃO é sobre exchange: a estratégia não tem edge validado, e
->    a fee da Bitget é PIOR que a da Bybit. Portar o robô só o faz perder
->    dinheiro numa corretora nova — ver "Próximos passos", item 3.
+> **PRÓXIMO PASSO REAL, na ordem** (a validação da API está COMPLETA — as 6
+> perguntas foram respondidas ao vivo; o que falta é código):
+> 1. **`src/exchange/bitget_client.py`** com as respostas acima, e
+>    `ExchangeCredentials` (`config/settings.py`) ganhando o campo de
+>    **passphrase**. Replicar do `probe_bitget.py`: fixar `options['uta']` no
+>    `__init__`, tratar `25204` como benigno, confirmar estado por releitura.
+> 2. Adaptar o que depende de detalhe de API da Bybit: `engine.py`
+>    (`_check_perp_exits`, `_handle_perp_position_closed`,
+>    `_update_perp_trailing_stop`) e `executor.py`. **A Bitget SIMPLIFICA**:
+>    sem cancelar ordem irmã (não existe irmã), sem `orderFilter`, trailing por
+>    modificação atômica em vez de cancelar-e-recriar — cai junto a janela sem
+>    proteção e a cura de arquivo stale.
+> 3. **A suíte (307 testes) é 100% escrita contra a Bybit.** Os fakes de
+>    exchange imitam respostas da Bybit v5; boa parte precisa de fake novo.
+>    Não ligar o motor antes de a suíte voltar verde.
+> 4. **Antes de ligar o motor, decidir a estratégia — isto NÃO é sobre a
+>    exchange.** Trocar de corretora resolve o bloqueio de KYC; não resolve que
+>    a estratégia não tem edge validado (painel unânime de 18/08) e que 22 dias
+>    na Bybit terminaram com a **fee acumulada maior que o lucro bruto**. Na
+>    Bitget a fee é **0,06% contra 0,055%** — o custo por trade SOBE. Os dois
+>    trades de validação ilustram: o 1º acertou a direção (+0,0028 bruto) e
+>    perdeu no líquido (−0,0059). Ver "Próximos passos", item 3.
 
 ---
 

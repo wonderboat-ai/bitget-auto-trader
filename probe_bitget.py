@@ -16,6 +16,7 @@ padrão.
     python probe_bitget.py --set-oneway    # fase 1: muda config da conta
     python probe_bitget.py --open          # fase 2: ORDEM REAL (size mínimo)
     python probe_bitget.py --inspect       # fase 3: confere proteções + equity
+    python probe_bitget.py --trail         # fase 5: move o stop (posição aberta)
     python probe_bitget.py --close         # fase 4: fecha e limpa órfãs
 
 Esta versão incorpora uma revisão adversarial (5 lentes + verificação cética,
@@ -528,6 +529,109 @@ def phase3(ex: ccxt.bitget) -> None:
           "`accountEquity`, e `fetch_balance()['USDT']['total']` NÃO serve.")
 
 
+def read_tpsl(ex: ccxt.bitget) -> dict[str, Any] | None:
+    """A ordem `tpsl` viva do símbolo (a que carrega stopLoss E takeProfit no
+    mesmo orderId). None = não achei ou não consegui ler."""
+    try:
+        orders = ex.fetch_open_orders(
+            SYMBOL, params={"stop": True, "planType": "profit_loss"})
+    except Exception as exc:  # noqa: BLE001
+        out("leitura da tpsl", f"FALHOU — {type(exc).__name__}: {exc}")
+        return None
+    for o in orders:
+        info = o.get("info") or {}
+        if info.get("type") == "tpsl" or info.get("stopLoss"):
+            return info
+    return None
+
+
+def phase5(ex: ccxt.bitget) -> None:
+    """Trailing: mover o stop de uma posição ABERTA sem fechá-la.
+
+    É a operação de escrita mais frequente do motor (105 movimentos reais em 18
+    dias na Bybit) e a última incógnita da API. A pergunta que só o teste ao
+    vivo responde: em UTA o ccxt recusa `stopLossPrice` e `takeProfitPrice`
+    juntos no edit (bitget.py:5641), então mover o stop envia um request COM
+    `stopLoss` e SEM `takeProfit`. Se a Bitget tratar campo ausente como
+    "limpar", o alvo morre a cada movimento — e o motor destruiria a própria
+    proteção de lucro em silêncio, movimento após movimento.
+
+    Opera sobre a posição que --open deixou aberta. Não abre nem fecha nada."""
+    section("FASE 5 — TRAILING: mover o stop com posição aberta (DINHEIRO REAL)")
+    ex.load_markets()
+    pos, ok = read_positions(ex)
+    if not ok:
+        sys.exit("não consegui ler posições.")
+    if not pos:
+        sys.exit("nenhuma posição aberta. Rode --open primeiro.")
+    p = pos[0]
+    lado = p.get("side")
+    entry = float(p.get("entryPrice") or 0)
+    out("posição", f"{lado} {p.get('contracts')} @ {entry}")
+
+    tpsl = read_tpsl(ex)
+    if not tpsl:
+        sys.exit("não achei a ordem tpsl da posição — nada a mover.")
+    order_id = tpsl.get("orderId")
+    sl0, tp0 = tpsl.get("stopLoss"), tpsl.get("takeProfit")
+    out("tpsl id", order_id)
+    out("estado inicial sl / tp", f"{sl0} / {tp0}")
+    if not tp0:
+        sys.exit("a tpsl não tem takeProfit — sem TP inicial o teste não prova nada.")
+
+    price = float(ex.fetch_ticker(SYMBOL)["last"])
+    # Sobe o stop na direção do lucro, como o trailing faria. Fica em -0,8% e
+    # -0,6%: mais perto que o -1% original, longe o bastante para não disparar.
+    fatores = (0.992, 0.994) if lado == "long" else (1.008, 1.006)
+    alvos = [float(ex.price_to_precision(SYMBOL, price * f)) for f in fatores]
+    out("preço atual", price)
+    out("mover stop para", " -> ".join(str(a) for a in alvos))
+    print("\nISTO ALTERA UMA ORDEM REAL. Não abre nem fecha posição.")
+    confirmar()
+
+    tp_atual = tp0
+    for i, alvo in enumerate(alvos, 1):
+        print(f"\n-- movimento {i}: stop -> {alvo} --")
+        try:
+            # `stopLossPrice` PLANO aqui (não o dict `stopLoss` do create_order):
+            # é o que roteia para ModifyStrategyOrder em UTA (bitget.py:5678).
+            # amount=None para não mexer na quantidade da proteção.
+            ex.edit_order(order_id, SYMBOL, "market", "sell", None, None,
+                          {"stopLossPrice": alvo})
+        except Exception as exc:  # noqa: BLE001
+            out("edit_order", f"FALHOU — {type(exc).__name__}: {exc}")
+            out("VEREDITO", "trailing por modificação NÃO funciona — o client "
+                            "terá de cancelar e recriar, como na Bybit")
+            return
+        ex.sleep(2000)
+        # Releitura, nunca a resposta do POST: é a lição do bug #23 e foi o que
+        # a fase 1 já provou valer nesta exchange.
+        novo = read_tpsl(ex)
+        if not novo:
+            out("VEREDITO", "a tpsl SUMIU após o edit — proteção perdida, "
+                            "CONFIRA NA BITGET AGORA")
+            sys.exit(1)
+        sl1, tp1 = novo.get("stopLoss"), novo.get("takeProfit")
+        out("  sl agora", f"{sl1} (pedido {alvo})")
+        out("  tp agora", f"{tp1} (era {tp_atual})")
+        out("  id agora", f"{novo.get('orderId')} (era {order_id})")
+        if not sl1 or abs(float(sl1) - alvo) > 0.5:
+            out("  !! stop NÃO foi movido como pedido", "")
+        if not tp1:
+            out("VEREDITO", "o takeProfit foi APAGADO ao mover o stop — o "
+                            "client PRECISA reenviar o TP a cada movimento")
+            sys.exit(1)
+        if tp1 != tp_atual:
+            out("  !! o tp MUDOU sozinho", f"{tp_atual} -> {tp1}")
+        order_id = novo.get("orderId") or order_id
+        tp_atual = tp1
+
+    print()
+    out("VEREDITO", "trailing por modificação FUNCIONA e preserva o takeProfit")
+    out("consequência p/ o port", "mover stop = 1 chamada edit_order; não há "
+                                  "cancelar+recriar nem janela sem proteção")
+
+
 def phase4(ex: ccxt.bitget) -> None:
     section("FASE 4 — fechar posição e cancelar o que sobrar")
     ex.load_markets()
@@ -596,6 +700,7 @@ def main() -> None:
     ap.add_argument("--set-oneway", action="store_true")
     ap.add_argument("--open", action="store_true")
     ap.add_argument("--inspect", action="store_true")
+    ap.add_argument("--trail", action="store_true")
     ap.add_argument("--close", action="store_true")
     args = ap.parse_args()
 
@@ -606,6 +711,8 @@ def main() -> None:
         phase2(ex)
     elif args.inspect:
         phase3(ex)
+    elif args.trail:
+        phase5(ex)
     elif args.close:
         phase4(ex)
     else:
