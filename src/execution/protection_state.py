@@ -19,7 +19,20 @@ nenhum trade_closed era auditado, e a ordem IRMÃ que não disparou ficava
 órfã e ativa, podendo executar contra uma posição futura não relacionada no
 mesmo símbolo. Ver engine.py:_check_perp_exits/_handle_perp_position_closed.
 `tp_id` (novo campo) só é usado por este caminho perp — spot nunca arma TP
-como ordem real, então fica sempre None lá."""
+como ordem real, então fica sempre None lá.
+
+ATUALIZAÇÃO (20/08/2026, port para a Bitget) — o significado dos ids MUDOU:
+na Bitget, stop e take-profit são UMA ordem só (`type: "tpsl"`, um único
+orderId carregando os dois gatilhos), criada anexada à ordem de entrada.
+Portanto **`stop_id` guarda o TPSL_ID** — o id da proteção inteira — e
+**`tp_id` fica sempre `None` por construção**, não porque falhou em armar,
+mas porque não existe uma segunda ordem para ter id.
+O campo `tp_id` foi MANTIDO no schema de propósito: `backfill_from_audit`
+ainda lê eventos `order_executed` antigos, e removê-lo quebraria a leitura
+desse histórico. Não repopule esse campo — o parágrafo acima sobre "ordem
+irmã órfã" descreve um problema que não existe na Bitget (a exchange cancela
+a tpsl sozinha quando a posição zera), e o bloco do engine que a cancelava
+foi removido."""
 from __future__ import annotations
 
 import json
@@ -104,7 +117,8 @@ def set_protection(symbol: str, *, entry_price: float, take_profit: float,
                     stop_id: str | None = None, tp_id: str | None = None,
                     side: str = "long", profile: str | None = None,
                     trailing: bool = False, trail_distance: float | None = None,
-                    peak_price: float | None = None) -> None:
+                    peak_price: float | None = None,
+                    opened_ts: int | None = None) -> None:
     protections = load()
     protections[symbol] = {
         "entry_price": entry_price,
@@ -146,6 +160,14 @@ def set_protection(symbol: str, *, entry_price: float, take_profit: float,
         "trailing": trailing,
         "trail_distance": trail_distance,
         "peak_price": peak_price,
+        # Timestamp (ms) da ENTRADA real (20/08/2026, port Bitget) — ancora
+        # temporal para `fetch_last_close_fill`, que sem isto consultaria
+        # `fetch_my_trades` sem janela nenhuma e podia escolher um fill de
+        # ORDEM ANTERIOR do mesmo símbolo como se fosse o fechamento desta
+        # posição. Preservado através de re-persists (o trailing chama
+        # `set_protection` de novo a cada movimento; sem repassar o valor
+        # original aqui, o primeiro movimento apagaria a âncora).
+        "opened_ts": opened_ts,
     }
     _save(protections)
 
@@ -219,4 +241,9 @@ def backfill_from_audit(symbol: str) -> dict | None:
         "trailing": bool(last.get("trailing")),
         "trail_distance": last.get("trail_distance"),
         "peak_price": last.get("peak_price"),
+        # opened_ts (20/08/2026, port Bitget): âncora temporal de
+        # fetch_last_close_fill. Eventos antigos sem o campo degradam pra
+        # None — fetch_last_close_fill recusa responder nesse caso, nunca
+        # adivinha.
+        "opened_ts": last.get("opened_ts"),
     }

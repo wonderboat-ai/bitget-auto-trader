@@ -15,7 +15,7 @@ import time
 from datetime import datetime, timezone
 
 from config.settings import (
-    get_credentials,
+    get_bitget_credentials,
     get_environment,
     get_log_level,
     get_market_type,
@@ -28,7 +28,7 @@ from src.context.providers import (
     DossierOnChainProvider,
 )
 from src.data.market_data import build_snapshot
-from src.exchange.bybit_client import SPOT_DUST_USDT, BybitClient
+from src.exchange.bitget_client import SPOT_DUST_USDT, BitgetClient
 from src.execution import protection_state
 from src.execution.executor import Executor
 from src.logger import audit, get_logger
@@ -50,10 +50,19 @@ class Engine:
         # governa client (endpoints), executor (mecânica de ordem) e mapeamento
         # de símbolos; o RiskManager lê a MESMA chave do YAML por conta própria.
         self.market_type = get_market_type(self.cfg)
-        self.client = BybitClient(
-            get_credentials(),
-            default_type="spot" if self.market_type == "spot" else "swap",
-        )
+        if self.market_type == "spot":
+            # Recusa ALTA, no boot, em vez de deixar o motor subir e descobrir
+            # o problema no meio de uma operação. O caminho spot não foi
+            # portado para a Bitget: `fetch_spot_holdings`/`fetch_free_base`
+            # são stubs que levantam, e a Bitget nem aceita stop/take-profit em
+            # spot pela API. Sem este guard, o motor abriria posição e só
+            # falharia na hora de proteger — exatamente o cenário que a regra
+            # "nunca posição nua" existe para impedir.
+            raise RuntimeError(
+                "market.type: 'spot' não é suportado na Bitget por este projeto. "
+                "Use 'perp' em config/risk_config.yaml."
+            )
+        self.client = BitgetClient(get_bitget_credentials())
         # environment= habilita limiares específicos de testnet no risco (YAML).
         self.risk = RiskManager(self.cfg, environment=get_environment())
         self.executor = Executor(self.client, dry_run=dry_run,
@@ -147,7 +156,13 @@ class Engine:
         # engine — depois de dias rodando, o limite 'diário' virava um stop
         # ancorado no passado. Kill switch disparado continua exigindo reset MANUAL.
         today = datetime.now(timezone.utc).date()
-        if self._day_start_equity is None or self._day_start_date != today:
+        # `equity > 0`: uma leitura genuinamente zerada (conta vazia — o único
+        # jeito de fetch_balance_usdt devolver 0.0 hoje) NUNCA pode virar o
+        # marco do dia. Se virasse, `_pct_drop` (risk_manager.py) trataria
+        # qualquer referência <=0 como "sem queda" e o drawdown DIÁRIO ficaria
+        # DESLIGADO em silêncio pelo resto do dia — proteção sumindo em vez de
+        # disparando, o pior dos dois erros possíveis aqui.
+        if equity > 0 and (self._day_start_equity is None or self._day_start_date != today):
             self._day_start_equity = equity
             self._day_start_date = today
         self._peak_equity = max(self._peak_equity, equity)
@@ -451,43 +466,79 @@ class Engine:
         reason = "external_close_unconfirmed"
         filled_id = None
 
-        # Confere as DUAS ordens — qualquer uma pode ter sido a que disparou.
+        # Na Bitget existe UMA ordem de proteção (a `tpsl`, com as duas pernas
+        # no mesmo id), então `stop_id` guarda o tpsl_id e não há "qual das duas
+        # disparou" a descobrir por id. O laço de dois candidatos da era Bybit
+        # saiu daqui — mantê-lo casaria SEMPRE no slot do stop e TODO trade
+        # sairia rotulado `stop_loss`, inclusive os vencedores. Isso não é só
+        # relatório errado: `record_trade_close` incrementa a sequência de stops
+        # e, com `consecutive_stops_trigger: 1`, o símbolo entraria em cooldown
+        # de 30/60/1440 min DEPOIS DE CADA TRADE QUE DEU CERTO.
         # "if fill_price" (não "is None"): average/price podem vir 0 num
         # status=closed+filled>0 legítimo — 0 não é fill confirmado, é dado
-        # ausente disfarçado (mesma classe de guard de
-        # _handle_spot_position_closed).
-        for order_id, candidate_reason, price_source in (
-            (stop_id, "stop_loss", "stop_order_fill"),
-            (tp_id, "take_profit", "tp_order_fill"),
-        ):
-            if not order_id:
-                continue
+        # ausente disfarçado.
+        tpsl_id = stop_id
+        if tpsl_id:
             try:
-                order = self.client.fetch_order(order_id, symbol)
+                order = self.client.fetch_order(tpsl_id, symbol)
             except Exception as exc:  # noqa: BLE001
-                log.warning("Sem confirmação da ordem %s (%s) de %s: %s",
-                            candidate_reason, order_id, symbol, exc)
-                continue
-            if order.get("status") == "closed" and float(order.get("filled") or 0) > 0:
+                log.warning("Sem confirmação da tpsl (%s) de %s: %s",
+                            tpsl_id, symbol, exc)
+                order = None
+            if order and order.get("status") == "closed" \
+                    and float(order.get("filled") or 0) > 0:
                 fill_price = order.get("average") or order.get("price")
                 if fill_price:
                     exit_price = float(fill_price)
-                    exit_source = price_source
-                    reason = candidate_reason
+                    exit_source = "tpsl_order_fill"
                     filled_qty = float(order.get("filled"))
                     if size is None or filled_qty < size:
                         size = filled_qty
-                    filled_id = order_id
-                    break
+                    filled_id = tpsl_id
 
         if exit_price is None:
-            # Nem stop nem TP confirmam fill (fechamento manual, liquidação,
-            # ou falha ao consultar as duas) — melhor aproximação disponível
-            # é o alvo do stop, nunca o preço de ticker atual (mesma
-            # convenção do caminho spot).
+            # A tpsl não confirmou fill. Na Bitget isso é ESPERADO em boa parte
+            # dos fechamentos: quando a posição zera por qualquer via, a
+            # exchange CANCELA a tpsl sozinha — ela vira `canceled` com
+            # filled=0 e não guarda o preço de saída. Sem uma segunda fonte,
+            # todo trade cairia em `external_close_unconfirmed` e o PnL da
+            # trilha seria sempre aproximado.
+            try:
+                fill = self.client.fetch_last_close_fill(
+                    symbol, protection.get("opened_ts"), side)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Sem fill de fechamento para %s: %s", symbol, exc)
+                fill = None
+            if fill and fill.get("average"):
+                exit_price = float(fill["average"])
+                exit_source = "close_trade_fill"
+                filled_qty = float(fill.get("filled") or 0)
+                if filled_qty and (size is None or filled_qty < size):
+                    size = filled_qty
+
+        if exit_price is None:
+            # Última linha: o alvo do stop, nunca o ticker atual (mesma
+            # convenção do caminho spot). PnL fica aproximado e a trilha diz.
             exit_price = protection.get("stop_price") or 0.0
             exit_source = "stop_price_target_approx"
         exit_price = float(exit_price)
+
+        # MOTIVO DA SAÍDA — derivado do PREÇO, não de qual ordem disparou.
+        # Com uma tpsl única não há outro jeito, e este tem a vantagem de ser
+        # side-agnóstico: funciona igual em long e short, sem ramo. Só vale
+        # quando o preço de saída foi CONFIRMADO; aproximado continua
+        # `external_close_unconfirmed`, porque aí o preço É o stop_price e a
+        # comparação abaixo seria circular (concluiria "stop_loss" sempre).
+        tp_target = protection.get("take_profit")
+        stop_target = protection.get("stop_price")
+        if exit_source != "stop_price_target_approx":
+            if tp_target and stop_target:
+                reason = ("take_profit"
+                          if abs(exit_price - float(tp_target))
+                          < abs(exit_price - float(stop_target))
+                          else "stop_loss")
+            elif stop_target:
+                reason = "stop_loss"
 
         # entry_price/exit_price/size no guard (não só entry_price): mesma
         # classe de bug "0 tratado como confirmado" já corrigida 2x no
@@ -509,30 +560,14 @@ class Engine:
         # take_profit e external_close_unconfirmed) reseta.
         self.risk.record_trade_close(symbol, reason)
 
-        # Cancela a ordem IRMÃ órfã — só quando confirmou COM CERTEZA qual
-        # das duas disparou (filled_id setado). Sem essa certeza (exit_source
-        # == "stop_price_target_approx"), cancelar às cegas por symbol
-        # poderia derrubar a proteção de uma posição NOVA já reaberta no
-        # mesmo símbolo nesse meio-tempo — mesma janela de risco já aceita e
-        # documentada no caminho spot (_check_spot_exits, limitação 18/07).
-        if filled_id is not None:
-            orphan_id = tp_id if filled_id == stop_id else stop_id
-            if orphan_id:
-                try:
-                    self.client.cancel_order(orphan_id, symbol)
-                    log.info("Ordem irmã órfã cancelada em %s (%s)", symbol, orphan_id)
-                except Exception as exc:  # noqa: BLE001
-                    # Não escala como falha de proteção: a ordem órfã só
-                    # executaria se o preço alcançasse o alvo antigo — risco
-                    # real, mas não imediato, e a posição (se houver alguma
-                    # nova no símbolo) tem seu próprio stop/TP intactos.
-                    # Falha de cancelamento comum: a ordem já não existe mais
-                    # (foi cancelada/expirou por conta própria) — não é
-                    # necessariamente um problema.
-                    log.warning("Falha ao cancelar ordem irmã órfã %s de %s: %s",
-                                orphan_id, symbol, exc)
-                    audit("perp_orphan_order_cancel_failed", symbol=symbol,
-                          orphan_order_id=orphan_id, error=str(exc))
+        # NÃO existe "ordem irmã órfã" na Bitget, e por isso o bloco que a
+        # cancelava (era o coração do bug #49 na Bybit) foi REMOVIDO em vez de
+        # deixado inerte — código morto aqui convidaria alguém a repopular
+        # `tp_id` no futuro e ressuscitar o problema.
+        # Duas razões independentes: stop e TP são a MESMA ordem, então nunca
+        # sobra uma perna viva; e a própria exchange cancela a tpsl quando a
+        # posição zera (medido em 20/08 — com a posição fechada, as gavetas de
+        # ordem ficaram vazias sem ninguém cancelar nada).
 
     def _check_perp_exits(self) -> None:
         """A cada ciclo, reconcilia posições PERP rastreadas que sumiram da
@@ -586,7 +621,8 @@ class Engine:
                     profile=backfilled.get("profile"),
                     trailing=bool(backfilled.get("trailing")),
                     trail_distance=backfilled.get("trail_distance"),
-                    peak_price=backfilled.get("peak_price"))
+                    peak_price=backfilled.get("peak_price"),
+                    opened_ts=backfilled.get("opened_ts"))
             except Exception as exc:  # noqa: BLE001
                 log.warning("Falha ao persistir backfill perp de %s: %s", symbol, exc)
 
@@ -685,9 +721,17 @@ class Engine:
             log.warning("Sem leitura do stop real de %s (%s) — trailing move "
                         "adiado pro próximo ciclo", symbol, exc)
             return
-        if real_stop.get("status") == "closed" and float(real_stop.get("filled") or 0) > 0:
-            # Já disparou — não é mais trabalho deste método; o próximo
-            # ciclo de _check_perp_exits reconcilia via _open_symbols.
+        status = real_stop.get("status")
+        if (status == "closed" and float(real_stop.get("filled") or 0) > 0) \
+                or status == "canceled":
+            # Já disparou, ou a exchange já cancelou a tpsl porque a posição
+            # zerou — nos dois casos não é mais trabalho deste método; o
+            # próximo ciclo de _check_perp_exits reconcilia via _open_symbols.
+            # O ramo "canceled" é específico da Bitget e não é detalhe: ela
+            # cancela a tpsl sozinha quando a posição fecha, e sem cobrir esse
+            # status o engine tentaria editar uma ordem inexistente a CADA
+            # ciclo, gerando erro perpétuo — o padrão dos 13.759
+            # `symbol_cycle_error` idênticos que este projeto já conhece.
             return
         real_trigger = real_stop.get("triggerPrice") or real_stop.get("stopPrice") or \
             (real_stop.get("info") or {}).get("triggerPrice")
@@ -706,42 +750,26 @@ class Engine:
                     _persist_peak_only(cur_stop)
                     return
 
+        # MOVIMENTO ATÔMICO — uma chamada, sem janela sem proteção.
+        # Aqui sumiu o trecho mais perigoso do trailing da Bybit: cancelar o
+        # stop antigo, criar o novo, e — se a criação falhasse — re-armar o
+        # antigo, com um `trailing_rearm_stop_failed` ("POSIÇÃO SEM STOP
+        # NENHUM") no fim do caminho. Aquilo existia porque a Bybit não tem
+        # modificação de condicional: entre o cancel e o create a posição
+        # ficava REALMENTE descoberta.
+        # Na Bitget, `edit_order` sobre a tpsl altera o gatilho de stop no
+        # lugar, preserva o take-profit e mantém o mesmo orderId (validado ao
+        # vivo em 20/08, dois movimentos consecutivos). Não existe estado
+        # intermediário, então falhar aqui é inofensivo: a proteção anterior
+        # continua valendo e o próximo ciclo tenta de novo — mesma postura do
+        # `return` mudo lá em cima quando a leitura do stop real falha.
         try:
-            self.client.cancel_order(stop_id, symbol)
+            new_order = self.client.move_stop_loss(stop_id, symbol, new_stop)
         except Exception as exc:  # noqa: BLE001
-            log.warning("cancel_order do stop antigo falhou em %s (%s) — trailing "
-                        "move abortado (pode já ter disparado): %s", symbol, stop_id, exc)
-            return
-
-        # side ORIGEM da posição (não o lado de fechamento) — set_stop_loss
-        # inverte internamente (bybit_client.py: close_side = oposto).
-        origin_side = "buy" if side == "long" else "sell"
-        try:
-            new_order = self.client.set_stop_loss(symbol, origin_side, size, new_stop)
-        except Exception as exc:  # noqa: BLE001
-            log.error("Novo stop falhou em %s (%.2f) após cancelar o antigo — "
-                      "re-armando no preço antigo (%.2f): %s",
-                      symbol, new_stop, cur_stop, exc)
-            try:
-                old_order = self.client.set_stop_loss(symbol, origin_side, size, cur_stop)
-                audit("trailing_move_failed_stop_rearmed", symbol=symbol,
-                      stop_price=cur_stop, error=str(exc), stop_id=old_order.get("id"))
-                try:
-                    protection_state.set_protection(
-                        symbol, entry_price=protection.get("entry_price") or 0.0,
-                        take_profit=protection.get("take_profit"), stop_price=cur_stop,
-                        size=size, stop_id=old_order.get("id"), tp_id=tp_id, side=side,
-                        profile=protection.get("profile"), trailing=True,
-                        trail_distance=trail, peak_price=peak)
-                except Exception as save_exc:  # noqa: BLE001
-                    log.warning("Stop antigo re-armado mas falha ao persistir "
-                                "novo stop_id de %s: %s", symbol, save_exc)
-            except Exception as rearm_exc:  # noqa: BLE001
-                log.critical("FALHA AO RE-ARMAR STOP de %s após trailing move "
-                             "falhar — POSIÇÃO SEM STOP NENHUM, intervir "
-                             "manualmente: %s", symbol, rearm_exc)
-                audit("trailing_rearm_stop_failed", symbol=symbol,
-                      move_error=str(exc), rearm_error=str(rearm_exc))
+            log.warning("Trailing (perp) não conseguiu mover o stop de %s "
+                        "(%.2f -> %.2f) — proteção ANTERIOR segue ativa, nova "
+                        "tentativa no próximo ciclo: %s",
+                        symbol, cur_stop, new_stop, exc)
             return
 
         try:
@@ -759,7 +787,11 @@ class Engine:
                 take_profit=protection.get("take_profit"), stop_price=new_stop,
                 size=size, stop_id=new_order.get("id"), tp_id=tp_id, side=side,
                 profile=protection.get("profile"), trailing=True,
-                trail_distance=trail, peak_price=peak)
+                trail_distance=trail, peak_price=peak,
+                # Preserva a âncora temporal da ENTRADA original — sem repassar
+                # isto aqui, o primeiro movimento do trailing apagaria
+                # `opened_ts` e `fetch_last_close_fill` perderia a janela.
+                opened_ts=protection.get("opened_ts"))
         except Exception as save_exc:  # noqa: BLE001
             log.warning("Trailing (perp) moveu o stop mas falhou ao persistir "
                         "novo stop_id de %s: %s", symbol, save_exc)
@@ -1540,16 +1572,30 @@ class Engine:
 
     def run_once(self) -> None:
         self._apply_control_signal()
-        state = self._portfolio_state()
-        self.risk.check_portfolio_health(state)
 
         # TP em spot / fechamento auditado em perp rodam mesmo com kill
         # switch ativo: não são entrada nova, são saída/limpeza de posição
         # já existente (mesma lógica do stop, que também nunca é bloqueado
         # pelo kill switch — decisão #B de 16/07). Cada método se auto-gate
         # pelo market_type real — nunca os dois fazem trabalho no mesmo boot.
+        # Rodam ANTES da leitura de equity, de propósito (port Bitget,
+        # 20/08/2026): `fetch_balance_usdt` agora LEVANTA em vez de degradar
+        # (correto — cair pro saldo livre seria o bug #3), mas isso significa
+        # que um blip transitório de rede não pode mais bloquear a
+        # reconciliação de fechamento nem o trailing de uma posição JÁ
+        # aberta — elas nunca dependeram de saldo pra existir.
         self._check_spot_exits()
         self._check_perp_exits()
+
+        try:
+            state = self._portfolio_state()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Leitura de portfólio falhou neste ciclo — saída/"
+                        "trailing já rodaram acima; pulando avaliação de "
+                        "entradas novas: %s", exc)
+            audit("portfolio_state_read_failed", error=str(exc))
+            return
+        self.risk.check_portfolio_health(state)
 
         if self.risk.halted:
             log.error("Engine pausado pelo kill switch. Aguardando reset manual.")

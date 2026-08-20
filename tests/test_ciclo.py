@@ -138,11 +138,6 @@ class FakeSaudavel:
     def fetch_open_positions(self):
         return []
 
-    def fetch_spot_holdings(self, symbols):
-        # cfg real do projeto já está em market.type=spot (decisão #E) —
-        # _portfolio_state() chama isto, não fetch_open_positions, nesse modo.
-        return []
-
     def fetch_funding_rate(self, symbol):
         # 0.001: seguro contra os DOIS clamps (max_abs_funding_rate mainnet
         # 0.003 e o testnet, mais frouxo, 0.01) — 27/07/2026, achado da
@@ -162,8 +157,13 @@ def eventos():
 
 # ---------- A. exclusividade por símbolo ----------
 AUDIT.unlink(missing_ok=True)
-engine_mod.BybitClient = FakeSaudavel
+engine_mod.BitgetClient = FakeSaudavel
 eng = engine_mod.Engine(dry_run=True)
+# YAML real hoje (18/08/2026) só tem 'swing' habilitado (daytrade desligado
+# por decisão de estratégia) — este teste existe pra provar EXCLUSIVIDADE (2
+# perfis competindo pelo mesmo símbolo), então habilita 'daytrade' só nesta
+# instância, em memória, sem tocar o arquivo real.
+eng.cfg["trading"]["profiles"]["daytrade"]["enabled"] = True
 eng.run_once()
 ev = eventos()
 ap_btc = [e for e in ev if e["event"] == "signal_approved" and e["symbol"].startswith("BTC")]
@@ -209,8 +209,9 @@ class FakeExecucaoNegada(FakeSaudavel):
 # restaura o YAML padrão (o bloco B apertou max_open_positions=1)
 shutil.copy2(_BAK_Y, YAMLP)
 AUDIT.unlink(missing_ok=True)
-engine_mod.BybitClient = FakeExecucaoNegada
+engine_mod.BitgetClient = FakeExecucaoNegada
 eng3 = engine_mod.Engine(dry_run=False)  # live de mentira: executor chama create_order
+eng3.cfg["trading"]["profiles"]["daytrade"]["enabled"] = True
 eng3.run_once()
 ev = eventos()
 ap = [e for e in ev if e["event"] == "signal_approved"]

@@ -24,12 +24,12 @@ import os
 from mcp.server.fastmcp import FastMCP
 
 from config.settings import (
-    get_credentials,
+    get_bitget_credentials,
     get_environment,
     get_market_type,
     load_risk_config,
 )
-from src.exchange.bybit_client import BybitClient
+from src.exchange.bitget_client import BitgetClient
 from src.supervision.state_reader import StateReader
 
 mcp = FastMCP("wonder_trader_mcp")
@@ -47,8 +47,8 @@ def _reader() -> StateReader:
         market_type = get_market_type(cfg)
         symbols = [s.split(":")[0] if market_type == "spot" else s
                    for s in cfg["trading"]["symbols"]]
-        client = BybitClient(
-            get_credentials(),
+        client = BitgetClient(
+            get_bitget_credentials(),
             default_type="spot" if market_type == "spot" else "swap",
         )
         return StateReader(client, market_type=market_type, symbols=symbols)

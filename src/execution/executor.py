@@ -6,8 +6,10 @@ permite paper trading puro mesmo conectado à testnet.
 """
 from __future__ import annotations
 
+import time
+
 from src.execution import protection_state
-from src.exchange.bybit_client import BybitClient
+from src.exchange.bitget_client import BitgetClient
 from src.logger import audit, get_logger
 from src.risk.risk_manager import RiskDecision
 from src.strategy.signal import Direction, Signal
@@ -16,7 +18,7 @@ log = get_logger("executor")
 
 
 class Executor:
-    def __init__(self, client: BybitClient, dry_run: bool = True,
+    def __init__(self, client: BitgetClient, dry_run: bool = True,
                  market_type: str = "perp") -> None:
         self.client = client
         self.dry_run = dry_run
@@ -66,8 +68,30 @@ class Executor:
         # clássicas (o ccxt calcula o custo amount*price); em conta unificada
         # ele apenas define o custo do mesmo jeito. Sem efeito em perp.
         entry_price = signal.entry_price if self.market_type == "spot" else None
+        # A PROTEÇÃO NASCE JUNTO COM A ENTRADA (Bitget, 20/08/2026).
+        # Isto substitui o `set_stop_loss` separado da era Bybit e é a única
+        # forma de criar a proteção aqui: na Bitget, stop e take-profit são UMA
+        # ordem (`type: "tpsl"`, um orderId com os dois gatilhos) e ela só é
+        # criável ANEXADA à ordem de entrada — não existe caminho no ccxt para
+        # criar uma tpsl de duas pernas depois do fill.
+        # Consequência boa: some a janela entre "posição aberta" e "stop armado"
+        # que obrigava o fechamento de emergência a existir na Bybit. Ela não
+        # some de vez (a tpsl pode não aparecer — ver a checagem adiante), mas
+        # deixa de ser o caminho normal.
+        # Os gatilhos vão como DICTS de propósito: `stopLossPrice`/
+        # `takeProfitPrice` PLANOS caem noutro branch do ccxt que usa
+        # `if stop / elif takeProfit` e DESCARTA a segunda perna em silêncio —
+        # a posição nasceria sem TP, ou sem stop, sem erro nenhum.
+        # `price=None` também importa: com preço, a perna vira stop LIMIT, que
+        # não preenche num gap.
+        entry_params: dict = {}
+        if self.market_type != "spot":
+            entry_params["stopLoss"] = {"triggerPrice": decision.stop_price}
+            if signal.take_profit:
+                entry_params["takeProfit"] = {"triggerPrice": signal.take_profit}
         entry = self.client.create_order(signal.symbol, side, size,
-                                         order_type="market", price=entry_price)
+                                         order_type="market", price=entry_price,
+                                         params=entry_params or None)
         # Preço médio de fill: alguns caminhos do ccxt não devolvem
         # average/price na resposta de CRIAÇÃO de ordem a mercado (visto ao
         # vivo em 17/07 e de novo em 19/07 — BTC e ETH, os dois com entry_price
@@ -88,7 +112,16 @@ class Executor:
             except Exception as exc:  # noqa: BLE001
                 log.warning("Sem confirmação do preço de entrada via fetch_order "
                             "de %s (%s): %s", signal.symbol, entry.get("id"), exc)
-            fill_price = fill_price or signal.entry_price
+            if not fill_price:
+                # Na Bitget este fallback deixou de ser raro: `create_order`
+                # responde só {orderId, clientOid}, então average/price vêm
+                # SEMPRE vazios e o `fetch_order` acima é o único caminho para o
+                # preço real. Cair aqui significa usar o close do último candle
+                # fechado como se fosse o fill — é o insumo do drift logo abaixo
+                # e do PnL de todo o trade. Antes isso era 100% mudo.
+                audit("entry_price_unconfirmed", symbol=signal.symbol,
+                      entry_id=entry.get("id"), fallback_price=signal.entry_price)
+                fill_price = signal.entry_price
 
         # Re-ancora stop/TP no preço REAL do fill (achado 20/07, visto ao
         # vivo num loop de reentrada): stop_price/take_profit são calculados
@@ -143,8 +176,12 @@ class Executor:
                 return min(size, free_now)
             return max(0.0, free_now - free_before)
 
-        protect_size = (self.client.amount_to_precision(signal.symbol, _read_protect_size())
-                        if self.market_type == "spot" else size)
+        # amount_to_precision também em PERP (antes só spot passava por aqui):
+        # o step do BTC na Bitget é 0.0001 e um tamanho fora do step é
+        # rejeitado. Sem isto, o `size` cru do RiskManager chega à exchange.
+        protect_size = self.client.amount_to_precision(
+            signal.symbol,
+            _read_protect_size() if self.market_type == "spot" else size)
 
         # Até 2 tentativas em spot: a leitura de saldo logo após a compra pode
         # vir atrasada/racy na exchange sob reentrada rápida (achado ao vivo em
@@ -167,30 +204,45 @@ class Executor:
         # bloqueio. Não corrigido (nenhum comportamento muda) — só
         # documentado aqui e no log de retry abaixo pra não confundir quem
         # diagnosticar um caso assim ao vivo.
-        max_attempts = 2 if self.market_type == "spot" else 1
-        stop = None
+        # A proteção já foi PEDIDA junto com a entrada. O que falta é CONFIRMAR
+        # que ela existe de verdade na exchange e descobrir o id dela — o
+        # `tpsl_id`, que o engine vai usar para mover o stop e para apurar o
+        # fechamento. Confirmar por leitura, nunca pela resposta do POST, é a
+        # lição do bug #23.
+        #
+        # Duas tentativas com pausa no meio: uma leitura única logo após a ordem
+        # pode vir atrasada e a tpsl ainda não estar indexada — é exatamente o
+        # bug #29 (declarar "sem proteção" sem nunca reconfirmar), que na Bybit
+        # gerou `naked_position_close_failed` com a posição na verdade protegida.
+        max_attempts = 2
+        tpsl: dict | None = None
         last_exc: Exception | None = None
         for attempt in range(max_attempts):
             try:
                 if protect_size <= 0:
                     raise RuntimeError(
-                        f"saldo base insuficiente para proteger ({protect_size})")
-                stop = self.client.set_stop_loss(signal.symbol, side, protect_size,
-                                                 stop_price)
+                        f"tamanho insuficiente para proteger ({protect_size})")
+                found = self.client.fetch_position_tpsl(signal.symbol)
+                if not found or not found.get("id"):
+                    raise RuntimeError("proteção tpsl não encontrada após a entrada")
+                if not found.get("stop_trigger"):
+                    # Guard truthy: uma tpsl só com a perna de TP deixa a
+                    # posição sem stop — pior que não ter proteção nenhuma,
+                    # porque PARECE protegida.
+                    raise RuntimeError(f"tpsl {found['id']} sem perna de stop-loss")
+                tpsl = found
                 last_exc = None
                 break
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 if attempt + 1 < max_attempts:
-                    log.warning("Stop falhou em %s (%s) — reconfirmando saldo "
-                                "antes de declarar sem proteção (nota: isto "
-                                "assume causa de saldo atrasado/racy — se o "
-                                "erro persistir IDÊNTICO na 2ª tentativa, pode "
-                                "ser bloqueio de compliance da exchange, não "
-                                "race de saldo; ver comentário acima)",
+                    log.warning("Proteção não confirmada em %s (%s) — "
+                                "reconsultando antes de declarar sem proteção",
                                 signal.symbol, exc)
-                    protect_size = self.client.amount_to_precision(
-                        signal.symbol, _read_protect_size())
+                    time.sleep(1.5)
+                    if self.market_type == "spot":
+                        protect_size = self.client.amount_to_precision(
+                            signal.symbol, _read_protect_size())
 
         if last_exc is not None:
             exc = last_exc
@@ -223,36 +275,40 @@ class Executor:
                   size=close_size, error=str(exc))
             raise
 
-        # Take-profit (decisão #F de 15/07/2026): a estratégia sempre emitiu TP,
-        # o backtest sempre o honrou, mas o executor o ignorava. O TP é proteção
-        # OPCIONAL: se falhar, a posição continua protegida pelo stop — loga/
-        # audita e segue (contraste deliberado com o stop, que é obrigatório).
-        # SPOT: TP não é colocado como ordem — o stop já OCUPOU o saldo base
-        # na colocação (tpslOrder) e a Bybit spot não tem OCO; uma segunda
-        # condicional seria rejeitada sempre. Registrado como
-        # take_profit_skipped e o alvo é salvo em protection_state.py: o
-        # engine confere o preço a cada ciclo e fecha por software quando
-        # atingido (ver engine.py:_check_spot_exits, 17/07/2026).
+        # O take-profit NÃO é armado aqui — ele nasceu junto com a entrada, na
+        # mesma ordem tpsl. Todo o bloco `set_take_profit` da era Bybit saiu, e
+        # com ele os eventos `take_profit_failed`/`take_profit_skipped`: não há
+        # mais um passo separado que possa falhar sozinho.
         tp = None
-        if self.market_type == "spot":
-            if take_profit:
-                log.info("TP não armado em spot (%s): sem OCO, o stop ocupa o "
-                         "saldo — engine confere o alvo a cada ciclo (saída "
-                         "por software, ver protection_state.py)",
-                         signal.symbol)
-                audit("take_profit_skipped", symbol=signal.symbol,
-                      take_profit=take_profit,
-                      reason="spot sem OCO — saldo base ocupado pelo stop")
-        elif take_profit:
-            try:
-                tp = self.client.set_take_profit(signal.symbol, side, size,
-                                                 take_profit)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("Take-profit falhou em %s (posição segue "
-                            "protegida pelo stop): %s", signal.symbol, exc)
-                audit("take_profit_failed", symbol=signal.symbol, side=side,
-                      size=size, take_profit=take_profit,
-                      error=str(exc))
+
+        # RE-ANCORAGEM PÓS-FATO (bug #26, adaptado).
+        # A tpsl foi criada com os preços calculados sobre `signal.entry_price`
+        # — o close do último candle FECHADO —, porque o fill real só é
+        # conhecido depois. Se o mercado andou dentro do mesmo candle (visto ao
+        # vivo na Bybit: ~565 USDT em ~2s), o TP pode nascer do lado errado da
+        # entrada real e a posição abre já "no alvo", fecha por centavos no
+        # ciclo seguinte e a fee de ida+volta vira prejuízo — repetindo
+        # enquanto o sinal continuar válido.
+        # Na Bybit isso era corrigido ANTES de armar; aqui a proteção já existe,
+        # então corrigimos por modificação. Falhar aqui NÃO é motivo para fechar
+        # a posição: ela está protegida, só com os gatilhos deslocados pelo
+        # drift. Audita e segue — fechar seria pior que o problema.
+        if self.market_type != "spot" and price_drift:
+            for rotulo, mover, alvo in (
+                ("stop", self.client.move_stop_loss, stop_price),
+                ("take_profit", self.client.move_take_profit, take_profit),
+            ):
+                if alvo is None:
+                    continue
+                try:
+                    mover(tpsl["id"], signal.symbol, alvo)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Re-ancoragem do %s falhou em %s (posição segue "
+                                "protegida, gatilho deslocado pelo drift): %s",
+                                rotulo, signal.symbol, exc)
+                    audit("protection_reanchor_failed", symbol=signal.symbol,
+                          leg=rotulo, target=alvo, price_drift=price_drift,
+                          tpsl_id=tpsl["id"], error=str(exc))
 
         # Proteção persistida SEMPRE, spot e perp (28/07/2026 — antes só
         # spot persistia aqui, pro TP por software). Perp precisa igualmente:
@@ -271,8 +327,12 @@ class Executor:
         protection_state.set_protection(
             signal.symbol, entry_price=fill_price,
             take_profit=take_profit, stop_price=stop_price,
-            size=protect_size, stop_id=stop.get("id"),
-            tp_id=tp.get("id") if tp else None,
+            # stop_id guarda o TPSL_ID — na Bitget stop e take-profit são a
+            # mesma ordem, então há um id só. `tp_id` fica None por construção
+            # (o campo sobrevive no schema por compatibilidade com arquivos
+            # antigos e com backfill_from_audit, não porque exista uma 2ª ordem).
+            size=protect_size, stop_id=tpsl["id"],
+            tp_id=None,
             # side (28/07/2026): "long"/"short" — necessário pro PnL e pro
             # trailing terem o sinal certo (short lucra com o preço caindo;
             # o stop desce em vez de subir). Perp agora suporta os dois.
@@ -282,14 +342,20 @@ class Executor:
             # certos no ciclo de saída.
             profile=signal.profile,
             trailing=signal.trailing, trail_distance=trail_distance,
-            peak_price=peak_price)
+            peak_price=peak_price,
+            # opened_ts: âncora temporal pra fetch_last_close_fill (engine.py)
+            # não consultar fetch_my_trades sem janela nenhuma — o timestamp
+            # da própria ordem de entrada quando disponível, senão o instante
+            # local (aproximação aceitável: um fill de ordem ANTERIOR nunca
+            # fica mais recente que "agora").
+            opened_ts=entry.get("timestamp") or int(time.time() * 1000))
 
         audit("order_executed", symbol=signal.symbol, side=side, size=size,
               protect_size=protect_size,
               entry_price=fill_price,
               stop_price=stop_price, take_profit=take_profit,
-              entry_id=entry.get("id"), stop_id=stop.get("id"),
-              tp_id=tp.get("id") if tp else None,
+              entry_id=entry.get("id"), stop_id=tpsl["id"],
+              tp_id=None,
               # profile/trailing: backfill_from_audit reconstrói a proteção a
               # partir deste evento — sem os campos, uma posição recuperada
               # da trilha perderia a saída por sinal/trailing (20/07).
@@ -297,6 +363,15 @@ class Executor:
               trailing=signal.trailing,
               trail_distance=(abs(fill_price - stop_price) if signal.trailing else None),
               peak_price=(fill_price if signal.trailing else None),
+              # opened_ts: sem isto na trilha, uma posição recuperada via
+              # backfill_from_audit (arquivo de estado perdido) voltaria a
+              # rodar sem âncora temporal — fetch_last_close_fill recusaria
+              # responder por segurança, mas não precisa.
+              opened_ts=entry.get("timestamp") or int(time.time() * 1000),
               testnet=self.client.is_testnet)
         log.info("Ordem executada %s %s (testnet=%s)", side, signal.symbol, self.client.is_testnet)
-        return {"entry": entry, "stop": stop, "take_profit": tp}
+        # `stop`/`tp` da era Bybit eram ordens separadas; na Bitget a proteção
+        # inteira é `tpsl` (uma ordem, dois gatilhos) — devolvida nas duas
+        # chaves porque nenhum chamador (engine.py:1652) olha o conteúdo, só
+        # `result is not None`.
+        return {"entry": entry, "stop": tpsl, "take_profit": tpsl}

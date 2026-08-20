@@ -23,6 +23,9 @@ class ExchangeCredentials:
     api_key: str
     api_secret: str
     testnet: bool
+    # Terceiro segredo, exigido pela Bitget e inexistente na Bybit. Fica com
+    # default vazio para não quebrar quem constrói credenciais da Bybit.
+    passphrase: str = ""
 
 
 def get_environment() -> str:
@@ -48,6 +51,36 @@ def get_credentials() -> ExchangeCredentials:
             "Operação real abortada por segurança."
         )
     return ExchangeCredentials(key, secret, testnet=False)
+
+
+def get_bitget_credentials() -> ExchangeCredentials:
+    """Credenciais da Bitget — sempre MAINNET, sempre dinheiro real.
+
+    Não existe ramo de testnet aqui, e a ausência é deliberada: a Bitget não
+    tem testnet acessível via ccxt (`urls['test']` é None). Aceitar
+    `ENVIRONMENT=testnet` devolvendo credenciais vazias faria o MCP entrar em
+    modo offline silencioso e o motor parecer saudável sem estar conectado a
+    nada — por isso o erro é explícito."""
+    env = get_environment()
+    if env != "mainnet":
+        raise RuntimeError(
+            f"ENVIRONMENT={env!r}, mas a Bitget não tem testnet via ccxt. "
+            "Use ENVIRONMENT=mainnet — e saiba que é dinheiro real."
+        )
+    key = os.getenv("BITGET_MAINNET_API_KEY", "").strip()
+    secret = os.getenv("BITGET_MAINNET_API_SECRET", "").strip()
+    passphrase = os.getenv("BITGET_MAINNET_API_PASSPHRASE", "").strip()
+    if not key or not secret or not passphrase:
+        # A passphrase entra no guard junto com key/secret: sem ela nenhuma
+        # chamada assinada passa, e o erro que a exchange devolve não deixa
+        # óbvio que o problema é uma variável de ambiente faltando.
+        faltam = [n for n, v in (("KEY", key), ("SECRET", secret),
+                                 ("PASSPHRASE", passphrase)) if not v]
+        raise RuntimeError(
+            f"Credenciais da Bitget incompletas (faltam: {', '.join(faltam)}). "
+            "Operação real abortada por segurança."
+        )
+    return ExchangeCredentials(key, secret, testnet=False, passphrase=passphrase)
 
 
 def load_risk_config(path: Path | None = None) -> dict:

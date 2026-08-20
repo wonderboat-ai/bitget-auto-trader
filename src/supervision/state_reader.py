@@ -8,7 +8,7 @@ Reúne, num único lugar, as respostas às perguntas que você faz ao sistema ro
   - "O kill switch disparou? Por quê?"       -> read_halt_status()
 
 Fontes:
-  - A exchange (via BybitClient) para saldo e posições — fonte da verdade do estado.
+  - A exchange (via BitgetClient) para saldo e posições — fonte da verdade do estado.
   - A trilha de auditoria (logs/audit.jsonl) para o PORQUÊ de cada decisão
     (aprovado/vetado/executado, racional do LLM, kill switch).
 
@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from src.exchange.bybit_client import BybitClient
+from src.exchange.bitget_client import BitgetClient
 from src.logger import get_logger
 
 log = get_logger("state_reader")
@@ -55,7 +55,7 @@ def _read_audit() -> list[dict]:
 
 
 class StateReader:
-    def __init__(self, client: BybitClient | None = None,
+    def __init__(self, client: BitgetClient | None = None,
                  market_type: str = "perp",
                  symbols: list[str] | None = None) -> None:
         # client opcional: sem ele, ainda dá pra ler a trilha de auditoria offline.

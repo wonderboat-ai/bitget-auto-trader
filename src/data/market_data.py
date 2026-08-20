@@ -12,7 +12,7 @@ from typing import Any
 
 import pandas as pd
 
-from src.exchange.bybit_client import BybitClient
+from src.exchange.bitget_client import BitgetClient
 
 
 @dataclass
@@ -100,7 +100,7 @@ def snapshot_from_df(
     return snap
 
 
-def build_snapshot(client: BybitClient, symbol: str, timeframe: str, limit: int = 200) -> MarketSnapshot:
+def build_snapshot(client: BitgetClient, symbol: str, timeframe: str, limit: int = 200) -> MarketSnapshot:
     raw = client.fetch_ohlcv(symbol, timeframe, limit=limit)
     df = pd.DataFrame(raw, columns=["ts", "open", "high", "low", "close", "volume"])
     # A Bybit devolve o candle EM FORMAÇÃO como última linha (high/low/close ainda
